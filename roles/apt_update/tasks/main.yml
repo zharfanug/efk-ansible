@@ -1,0 +1,31 @@
+---
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: true
+
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+  register: upgrade_result
+
+- name: Restart system if needed
+  when: upgrade_result.changed
+  ansible.builtin.reboot:
+    msg: "Rebooting system due to package upgrade"
+    connect_timeout: 300
+    reboot_timeout: 600
+  # noqa: no-handler
+
+- name: Remove unnecessary packages
+  ansible.builtin.apt:
+    autoremove: true
+
+# - name: Get kernel version
+#   ansible.builtin.command:
+#     cmd: uname -r
+#   register: kernel_version
+#   changed_when: false
+
+# - name: Show OS version
+#   ansible.builtin.debug:
+#     msg: "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}, Kernel: {{ kernel_version.stdout }}"

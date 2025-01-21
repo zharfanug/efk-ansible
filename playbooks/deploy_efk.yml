@@ -1,0 +1,77 @@
+---
+- name: Deploy EFK Stack
+  hosts: all
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Update Packages
+      ansible.builtin.include_role:
+        name: apt_update
+    - name: Push Nftables Rules
+      ansible.builtin.include_role:
+        name: nft_push
+    - name: Push Trust CA
+      ansible.builtin.include_role:
+        name: trust_ca_push
+    - name: Push elastic agent installer
+      ansible.builtin.include_role:
+        name: ea_push
+
+    - name: Deploy Load Balancer
+      when: "'lb' in group_names"
+      block:
+        - name: Install Load Balancer
+          ansible.builtin.include_role:
+            name: lb_install
+        - name: Initialize Load Balancer
+          ansible.builtin.include_role:
+            name: lb_init
+
+    - name: Stop Kibana
+      when: "'kbn' in group_names"
+      block:
+        - name: Stop Kibana Service
+          ansible.builtin.include_role:
+            name: kibana_stop
+
+    - name: Deploy Elasticsearch
+      when: "'es' in group_names"
+      block:
+        - name: Initialize Disk for Data
+          ansible.builtin.include_role:
+            name: disk_init
+        - name: Remove Elasticsearch
+          ansible.builtin.include_role:
+            name: es_remove
+        - name: Install Elasticsearch
+          ansible.builtin.include_role:
+            name: es_install
+        - name: Initialize Elasticsearch
+          ansible.builtin.include_role:
+            name: es_init
+
+    - name: Deploy Kibana
+      when: "'kbn' in group_names"
+      block:
+        - name: Install Kibana
+          ansible.builtin.include_role:
+            name: kibana_install
+        - name: Initialize Kibana
+          ansible.builtin.include_role:
+            name: kibana_init
+
+    - name: Prepare Fleet Server
+      when:
+        - "'es' in group_names"
+        - nodeinit | default(false) | bool
+      block:
+        - name: Prepare fleet items
+          ansible.builtin.include_role:
+            name: fleet_prep
+
+    - name: Deploy Fleet Server
+      when: "'fs' in group_names"
+      block:
+        - name: Prepare fleet items
+          ansible.builtin.include_role:
+            name: fleet_install

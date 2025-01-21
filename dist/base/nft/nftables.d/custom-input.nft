@@ -1,0 +1,4 @@
+chain custom_input {
+  # sample
+  # ip saddr @net_locals tcp dport {5601,9200} accept
+}

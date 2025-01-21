@@ -1,0 +1,98 @@
+---
+- name: Gather the package facts
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Stop Elasticsearch service if running
+  ansible.builtin.service:
+    name: elasticsearch
+    state: stopped
+  when: "'elasticsearch' in ansible_facts.packages"
+
+- name: Check if /var/lib/elasticsearch exists
+  ansible.builtin.stat:
+    path: /var/lib/elasticsearch
+  register: es_dir
+
+- name: Check if /var/lib/elasticsearch is mounted
+  ansible.builtin.shell: mount | grep /var/lib/elasticsearch
+  register: mount_check
+  failed_when: "mount_check.rc == 2"
+  when:
+    - "'elasticsearch' in ansible_facts.packages"
+    - es_dir.stat.exists
+  changed_when: false
+  # noqa: risky-shell-pipe
+  # noqa: command-instead-of-module
+
+- name: Find files and directories in /var/lib/elasticsearch
+  ansible.builtin.find:
+    paths: /var/lib/elasticsearch
+    file_type: any
+  register: files_to_delete
+  when: es_dir.stat.exists
+- name: Delete files and directories inside /var/lib/elasticsearch
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ files_to_delete.files }}"
+  when: es_dir.stat.exists
+  changed_when: files_to_delete.matched > 0
+
+- name: Unmount /var/lib/elasticsearch if mounted
+  ansible.posix.mount:
+    path: /var/lib/elasticsearch
+    state: unmounted
+  when:
+    - "'elasticsearch' in ansible_facts.packages"
+    - es_dir.stat.exists
+
+- name: Purge Elasticsearch package
+  ansible.builtin.command:
+    cmd: apt remove --purge -y elasticsearch
+  when: "'elasticsearch' in ansible_facts.packages"
+  changed_when: true
+
+- name: Delete /etc/elasticsearch if it exists
+  ansible.builtin.file:
+    path: /etc/elasticsearch
+    state: absent
+
+- name: Delete /usr/share/elasticsearch if it exists
+  ansible.builtin.file:
+    path: /usr/share/elasticsearch
+    state: absent
+
+- name: Delete /var/log/elasticsearch if it exists
+  ansible.builtin.file:
+    path: /var/log/elasticsearch
+    state: absent
+
+- name: Check if /var/lib/elasticsearch exists
+  ansible.builtin.stat:
+    path: /var/lib/elasticsearch
+  register: es_dir
+
+- name: Find files and directories in /var/lib/elasticsearch
+  ansible.builtin.find:
+    paths: /var/lib/elasticsearch
+    file_type: any
+  register: files_to_delete
+  when: es_dir.stat.exists
+- name: Delete files and directories inside /var/lib/elasticsearch
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  with_items: "{{ files_to_delete.files }}"
+  when: es_dir.stat.exists
+  changed_when: files_to_delete.matched > 0
+
+- name: Delete /usr/share/keyrings/elasticsearch-keyring.gpg if it exists
+  ansible.builtin.file:
+    path: /usr/share/keyrings/elasticsearch-keyring.gpg
+    state: absent
+
+- name: Delete /etc/apt/sources.list.d/elastic-8.x.list if it exists
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/elastic-8.x.list
+    state: absent

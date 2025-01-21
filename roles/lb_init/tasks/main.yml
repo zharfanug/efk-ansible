@@ -1,0 +1,142 @@
+---
+- name: Write the keepalived.conf configuration file
+  ansible.builtin.copy:
+    dest: /etc/keepalived/keepalived.conf
+    content: |
+      vrrp_instance VI_1 {
+        state {{ state }}
+        interface {{ ansible_facts.default_ipv4.interface }}
+        virtual_router_id 51
+        priority {{ priority }} # Higher value means higher priority
+        advert_int 1 # Advertisement interval in seconds
+
+        authentication {
+          auth_type PASS
+          auth_pass {{ kk }}
+        }
+
+        virtual_ipaddress {
+          {{ lb_vs_ip }} # Floating IP
+        }
+      }
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Enable keepalived service
+  ansible.builtin.service:
+    name: keepalived
+    enabled: true
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Restart keepalived service if already running
+  when: ansible_facts.services['keepalived'].state == 'running'
+  ansible.builtin.service:
+    name: keepalived
+    state: restarted
+
+- name: Start keepalived service
+  when: ansible_facts.services['keepalived'].state != 'running'
+  ansible.builtin.service:
+    name: keepalived
+    state: started
+
+- name: Create directory for haproxy configuration
+  ansible.builtin.file:
+    path: /etc/haproxy/conf.d
+    state: directory
+    mode: "0755"
+    owner: "root"
+    group: "root"
+
+- name: Copy all haproxy configuration
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/haproxy/conf.d/{{ item | basename }}"
+    mode: "0644"
+  with_fileglob:
+    - "../files/lb/haproxy/conf.d/*"
+
+- name: Write the haproxy service
+  ansible.builtin.copy:
+    dest: /usr/lib/systemd/system/haproxy.service
+    content: |
+      [Unit]
+      Description=HAProxy Load Balancer
+      Documentation=man:haproxy(1)
+      Documentation=file:/usr/share/doc/haproxy/configuration.txt.gz
+      After=network-online.target rsyslog.service
+      Wants=network-online.target
+
+      [Service]
+      EnvironmentFile=-/etc/default/haproxy
+      EnvironmentFile=-/etc/sysconfig/haproxy
+      BindReadOnlyPaths=/dev/log:/var/lib/haproxy/dev/log
+      Environment="CONFIG=/etc/haproxy/haproxy.cfg" "CONFIGDIR=/etc/haproxy/conf.d" "PIDFILE=/run/haproxy.pid" "EXTRAOPTS=-S /run/haproxy-master.sock"
+      ExecStart=/usr/sbin/haproxy -Ws -f $CONFIGDIR -p $PIDFILE $EXTRAOPTS
+      ExecReload=/usr/sbin/haproxy -Ws -f $CONFIGDIR -c -q $EXTRAOPTS
+      ExecReload=/bin/kill -USR2 $MAINPID
+      KillMode=mixed
+      Restart=always
+      SuccessExitStatus=143
+      Type=notify
+
+      # The following lines leverage SystemD's sandboxing options to provide
+      # defense in depth protection at the expense of restricting some flexibility
+      # in your setup (e.g. placement of your configuration files) or possibly
+      # reduced performance. See systemd.service(5) and systemd.exec(5) for further
+      # information.
+
+      # NoNewPrivileges=true
+      # ProtectHome=true
+      # If you want to use 'ProtectSystem=strict' you should whitelist the PIDFILE,
+      # any state files and any other files written using 'ReadWritePaths' or
+      # 'RuntimeDirectory'.
+      # ProtectSystem=true
+      # ProtectKernelTunables=true
+      # ProtectKernelModules=true
+      # ProtectControlGroups=true
+      # If your SystemD version supports them, you can add: @reboot, @swap, @sync
+      # SystemCallFilter=~@cpu-emulation @keyring @module @obsolete @raw-io
+
+      [Install]
+      WantedBy=multi-user.target
+    owner: root
+    group: root
+    mode: "0644"
+  register: write_haproxy_service
+
+- name: Enable haproxy service
+  ansible.builtin.service:
+    name: haproxy
+    enabled: true
+
+- name: Reload systemd daemon to haproxy config path
+  when: write_haproxy_service.changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  # noqa: no-handler
+
+- name: Restart haproxy service if already running
+  when: ansible_facts.services['haproxy'].state == 'running'
+  ansible.builtin.service:
+    name: haproxy
+    state: restarted
+
+- name: Start haproxy service
+  when: ansible_facts.services['haproxy'].state != 'running'
+  ansible.builtin.service:
+    name: haproxy
+    state: started
+
+- name: Copy all required Fleet certificates
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/nginx/certs/{{ item | basename }}"
+    owner: "root"
+    group: "root"
+    mode: "0600"
+  with_fileglob:
+    - "../files/certs/fleet/*"

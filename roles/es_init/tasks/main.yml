@@ -1,0 +1,290 @@
+---
+- name: Create directory for Elasticsearch certificates
+  ansible.builtin.file:
+    path: /etc/elasticsearch/certs
+    state: directory
+    mode: "0750"
+    owner: "root"
+    group: "elasticsearch"
+
+- name: Copy all required Elasticsearch certificates
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/elasticsearch/certs/{{ item | basename }}"
+    owner: "root"
+    group: "elasticsearch"
+    mode: "0660"
+  with_fileglob:
+    - "../files/certs/elasticsearch/*"
+
+- name: Create directory for Elasticsearch systemd service overrides
+  ansible.builtin.file:
+    path: /etc/systemd/system/elasticsearch.service.d
+    state: directory
+    mode: '0755'
+
+- name: Create override.conf file with LimitMEMLOCK setting
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/elasticsearch.service.d/override.conf
+    content: |
+      [Service]
+      LimitMEMLOCK=infinity
+    mode: '0644'
+  register: override_memlock
+
+- name: Reload systemd daemon to apply override_memlock
+  when: override_memlock.changed
+  ansible.builtin.systemd:
+    daemon_reload: true
+  # noqa: no-handler
+
+- name: Ensure backup directory exists
+  ansible.builtin.file:
+    path: /etc/elasticsearch/backup
+    state: directory
+    mode: "0750"
+    owner: "root"
+    group: "elasticsearch"
+
+- name: Check if elasticsearch.yml exists
+  ansible.builtin.stat:
+    path: /etc/elasticsearch/elasticsearch.yml
+  register: elasticsearch_yml_stat
+
+- name: Backup elasticsearch.yml
+  ansible.builtin.copy:
+    src: /etc/elasticsearch/elasticsearch.yml
+    dest: /etc/elasticsearch/backup/elasticsearch.yml_{{ ansible_date_time.date }}-{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.backup
+    remote_src: true
+    owner: root
+    group: elasticsearch
+    mode: "0660"
+  when: elasticsearch_yml_stat.stat.exists
+
+- name: Check if elasticsearch.keystore exists
+  ansible.builtin.stat:
+    path: /etc/elasticsearch/elasticsearch.keystore
+  register: elasticsearch_keystore_exists
+
+- name: Backup elasticsearch.keystore
+  ansible.builtin.copy:
+    src: /etc/elasticsearch/elasticsearch.keystore
+    dest: /etc/elasticsearch/backup/elasticsearch.keystore_{{ ansible_date_time.date }}-{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.backup
+    remote_src: true
+    owner: root
+    group: elasticsearch
+    mode: "0660"
+
+- name: Add keystore passwords to elasticsearch
+  ansible.builtin.shell: echo "{{ p31 }}" | /usr/share/elasticsearch/bin/elasticsearch-keystore add -fx "{{ item }}"
+  loop:
+    - xpack.security.http.ssl.keystore.secure_password
+    - xpack.security.transport.ssl.keystore.secure_password
+    - xpack.security.transport.ssl.truststore.secure_password
+  changed_when: true
+  # noqa: risky-shell-pipe
+
+- name: Write the elasticsearch.yml configuration file for init node
+  ansible.builtin.copy:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    content: |
+      cluster.name: "{{ es_cluster | default('efk-elastics') }}"
+      node.name: "{{ ansible_hostname }}.{{ ansible_domain }}"
+      path.data: /var/lib/elasticsearch
+      path.logs: /var/log/elasticsearch
+      bootstrap.memory_lock: true
+      cluster.initial_master_nodes: ["{{ ansible_hostname }}.{{ ansible_domain }}"]
+
+      xpack.security.enabled: true
+      xpack.security.enrollment.enabled: true
+      xpack.security.http.ssl:
+        enabled: true
+        keystore.path: certs/http.p12
+      xpack.security.transport.ssl:
+        enabled: true
+        verification_mode: certificate
+        keystore.path: certs/transport.p12
+        truststore.path: certs/transport.p12
+
+      http.host: 0.0.0.0
+      transport.host: 0.0.0.0
+    owner: root
+    group: elasticsearch
+    mode: "0660"
+  when: nodeinit | default(false) | bool
+
+- name: Write the elasticsearch.yml configuration file for non-init node
+  ansible.builtin.copy:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    content: |
+      cluster.name: "{{ es_cluster | default('elk-elastics') }}"
+      node.name: "{{ ansible_hostname }}.{{ ansible_domain }}"
+      path.data: /var/lib/elasticsearch
+      path.logs: /var/log/elasticsearch
+      bootstrap.memory_lock: true
+      discovery.seed_hosts: ["{{ hostvars[groups['es'][0]].ansible_hostname }}.{{ hostvars[groups['es'][0]].ansible_domain }}"]
+
+      xpack.security.enabled: true
+      xpack.security.enrollment.enabled: true
+      xpack.security.http.ssl:
+        enabled: true
+        keystore.path: certs/http.p12
+      xpack.security.transport.ssl:
+        enabled: true
+        verification_mode: certificate
+        keystore.path: certs/transport.p12
+        truststore.path: certs/transport.p12
+
+      http.host: 0.0.0.0
+      transport.host: 0.0.0.0
+    owner: root
+    group: elasticsearch
+    mode: "0660"
+  when: not (nodeinit | default(false) | bool)
+
+- name: Init Elasticsearch on init node
+  when: nodeinit | default(false) | bool
+  block:
+    - name: Start Elasticsearch service on init nodes
+      ansible.builtin.service:
+        name: elasticsearch
+        state: started
+    - name: Check if .env exists
+      ansible.builtin.stat:
+        path: /root/.env
+      register: env_file_stat
+    - name: Read .env file
+      ansible.builtin.command:
+        cmd: cat /root/.env
+      register: env_file
+      changed_when: false
+      when: env_file_stat.stat.exists
+    - name: Set ELASTIC_PASSWORD fact
+      ansible.builtin.set_fact:
+        elastic_password: "{{ env_file.stdout | regex_search('ELASTIC_PASSWORD=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Init Elasticsearch on non-init node
+  when: not (nodeinit | default(false) | bool)
+  block:
+    - name: Check if /root/.env exists
+      ansible.builtin.stat:
+        path: /root/.env
+      register: env_file_stat
+
+    - name: Save Elasticsearch password to .env file if not exist
+      ansible.builtin.copy:
+        content: |
+          ELASTIC_PASSWORD="{{ hostvars[groups['es'][0]].elastic_password }}"
+        dest: /root/.env
+        mode: '0600'
+      when: not env_file_stat.stat.exists
+
+    - name: Update or add ELASTIC_PASSWORD in /root/.env
+      ansible.builtin.shell: |
+        if grep -q '^ELASTIC_PASSWORD' /root/.env; then
+          sed -i 's/^ELASTIC_PASSWORD=.*/ELASTIC_PASSWORD="{{ hostvars[groups['es'][0]].elastic_password }}"/' /root/.env
+        else
+          echo "ELASTIC_PASSWORD={{ hostvars[groups['es'][0]].elastic_password }}" >> /root/.env
+        fi
+      changed_when: true
+      when: env_file_stat.stat.exists
+
+    - name: Start Elasticsearch service on non-init nodes
+      ansible.builtin.service:
+        name: elasticsearch
+        state: started
+
+- name: Gather all node hosts
+  ansible.builtin.set_fact:
+    all_nodes: "{{ groups['es'] | map('extract', hostvars, 'ansible_host') | list }}"
+
+  # - name: Debug all_nodes variable
+  #   ansible.builtin.debug:
+  #     msg: "{{ all_nodes }}"
+
+- name: Write the elasticsearch.yml configuration file for all node
+  ansible.builtin.copy:
+    dest: /etc/elasticsearch/elasticsearch.yml
+    content: |
+      cluster.name: "{{ es_cluster | default('elk-elastics') }}"
+      node.name: "{{ ansible_hostname }}.{{ ansible_domain }}"
+      path.data: /var/lib/elasticsearch
+      path.logs: /var/log/elasticsearch
+      bootstrap.memory_lock: true
+      discovery.seed_hosts: {{ all_nodes }}
+
+      xpack.security.enabled: true
+      xpack.security.enrollment.enabled: true
+      xpack.security.http.ssl:
+        enabled: true
+        keystore.path: certs/http.p12
+      xpack.security.transport.ssl:
+        enabled: true
+        verification_mode: certificate
+        keystore.path: certs/transport.p12
+        truststore.path: certs/transport.p12
+
+      http.host: 0.0.0.0
+      transport.host: 0.0.0.0
+    owner: root
+    group: elasticsearch
+    mode: "0660"
+
+- name: Enable Elasticsearch service
+  ansible.builtin.service:
+    name: elasticsearch
+    enabled: true
+
+- name: Restart Elasticsearch service
+  ansible.builtin.service:
+    name: elasticsearch
+    state: restarted
+
+- name: Generate Kibana token
+  when: nodeinit | default(false) | bool
+  block:
+    - name: Debug
+      ansible.builtin.debug:
+        msg: "{{ elastic_password }}"
+    - name: Wait 5 seconds
+      ansible.builtin.pause:
+        seconds: 5
+    - name: Make POST request to generate Kibana token
+      ansible.builtin.uri:
+        url: "https://localhost:9200/_security/service/elastic/kibana/credential/token/mykibana"
+        method: POST
+        user: "elastic"
+        password: "{{ elastic_password }}"
+        status_code: 200
+      register: generate_kibana_token
+    - name: Set kibana_token fact
+      ansible.builtin.set_fact:
+        kibana_token: "{{ generate_kibana_token.json.token.value }}"
+
+- name: Create new admin user
+  when:
+    - nodeinit | default(false) | bool
+    - es_user is defined
+    - es_pw is defined
+  block:
+    - name: Create or update Elasticsearch user
+      ansible.builtin.uri:
+        url: "https://localhost:9200/_security/user/{{ es_user }}"
+        method: PUT
+        user: "elastic"
+        password: "{{ elastic_password }}"
+        headers:
+          Content-Type: "application/json"
+        body: >-
+          {
+            "password": "{{ es_pw | b64decode }}",
+            "roles": ["superuser"],
+            "full_name": "{{ es_fullname | default(es_user) }}",
+            "email": "{{ es_email | default('example@acme.com') }}"
+          }
+        body_format: json
+        status_code: 200
+      register: create_user_output
+    - name: Show create Elasticsearch user output
+      ansible.builtin.debug:
+        msg: "{{ create_user_output.json }}"

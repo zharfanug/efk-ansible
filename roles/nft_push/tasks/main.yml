@@ -1,0 +1,53 @@
+---
+- name: Update package cache
+  ansible.builtin.package:
+    update_cache: true
+- name: Install nftables if not present
+  ansible.builtin.package:
+    name:
+      - nftables
+    state: present
+
+- name: Copy nftables.conf based on group
+  ansible.builtin.copy:
+    src: "../files/{{ group_names | first }}/nft/nftables.conf"
+    dest: /etc/nftables.conf
+    mode: '0644'
+  # noqa: no-relative-paths
+
+- name: Ensure /etc/nftables.d exists
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    mode: '0755'
+
+- name: Copy nftables.d based on group
+  ansible.builtin.copy:
+    src: "../files/{{ group_names | first }}/nft/nftables.d/"
+    dest: /etc/nftables.d/
+  # noqa: no-relative-paths
+  # noqa: risky-file-permissions
+
+- name: Enable nftables service
+  ansible.builtin.service:
+    name: nftables
+    enabled: true
+
+- name: Check nftables service status
+  ansible.builtin.command: systemctl is-active nftables.service
+  register: nftables_status
+  failed_when: nftables_status.rc not in [0, 3]
+  changed_when: false
+  # noqa: command-instead-of-module
+
+- name: Start nftables service if not running
+  ansible.builtin.service:
+    name: nftables
+    state: started
+  when: nftables_status.stdout != "active"
+
+- name: Restart nftables service if running
+  ansible.builtin.service:
+    name: nftables
+    state: restarted
+  when: nftables_status.stdout == "active"

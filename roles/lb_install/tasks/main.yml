@@ -1,0 +1,11 @@
+---
+- name: Update package cache
+  ansible.builtin.package:
+    update_cache: true
+- name: Install load balance if not present
+  ansible.builtin.package:
+    name:
+      - keepalived
+      - haproxy
+      - nginx
+    state: present

@@ -1,0 +1,133 @@
+---
+- name: Check if disk /dev/sdb exists
+  ansible.builtin.command: lsblk /dev/sdb
+  register: disk_check
+  changed_when: false
+  ignore_errors: true
+
+- name: Init and mount /dev/sdb
+  when: disk_check.rc == 0
+  block:
+    - name: Update package cache
+      ansible.builtin.package:
+        update_cache: true
+    - name: Install xfsprogs if not present
+      ansible.builtin.package:
+        name:
+          - xfsprogs
+        state: present
+    - name: Check if physical volume /dev/sdb exist
+      ansible.builtin.command: pvdisplay /dev/sdb
+      register: pv_check
+      changed_when: false
+      ignore_errors: true
+    - name: Create physical volume /dev/sdb if not exist
+      when: pv_check.rc != 0
+      ansible.builtin.command: pvcreate /dev/sdb
+      changed_when: true
+    - name: Make sure if /dev/sdb is already a physical volume
+      ansible.builtin.command: pvdisplay /dev/sdb
+      register: pv_check
+      changed_when: false
+    - name: Preparing volume group vg_data
+      when: pv_check.rc == 0
+      block:
+        - name: Check if volume group vg_data exists
+          ansible.builtin.command: vgs vg_data
+          register: vg_check
+          changed_when: false
+          ignore_errors: true
+        - name: Create volume group vg_data if not exist
+          when: vg_check.rc != 0
+          ansible.builtin.command: vgcreate vg_data /dev/sdb
+          changed_when: true
+        - name: Make sure if volume group vg_data exists
+          ansible.builtin.command: vgs vg_data
+          register: vg_check
+          changed_when: false
+        - name: Prepare logical volume lv_data
+          when: vg_check.rc == 0
+          block:
+            - name: Check if logical volume lv_data exists
+              ansible.builtin.command: lvdisplay /dev/vg_data/lv_data
+              register: lv_check
+              changed_when: false
+              ignore_errors: true
+            - name: Create logical volume lv_data if not exist
+              ansible.builtin.command: lvcreate -n lv_data -l 100%FREE vg_data
+              when: lv_check.rc != 0
+              changed_when: true
+            - name: Make sure if logical volume lv_data exists
+              ansible.builtin.command: lvdisplay /dev/vg_data/lv_data
+              register: lv_check
+              changed_when: false
+            - name: Prepare to format /dev/vg_data/lv_data
+              when: lv_check.rc == 0
+              block:
+                - name: Check if /dev/vg_data/lv_data is formatted
+                  ansible.builtin.command: blkid /dev/vg_data/lv_data
+                  register: xfs_check
+                  changed_when: false
+                  ignore_errors: true
+                - name: Format /dev/vg_data/lv_data with xfs filesystem
+                  ansible.builtin.command: mkfs.xfs -K /dev/vg_data/lv_data
+                  when: xfs_check.rc != 0
+                  changed_when: true
+                - name: Make sure if /dev/vg_data/lv_data is formatted
+                  ansible.builtin.command: blkid /dev/vg_data/lv_data
+                  register: xfs_check
+                  changed_when: false
+                - name: Prepare /etc/fstab
+                  when: xfs_check.rc == 0
+                  block:
+                    - name: Check if /dev/vg_data/lv_data is in /etc/fstab
+                      ansible.builtin.command: grep -e "^\/dev\/vg_data\/lv_data" /etc/fstab
+                      register: fstab_check
+                      changed_when: false
+                      failed_when: "fstab_check.rc == 2"
+                    - name: Add entry for /dev/vg_data/lv_data in /etc/fstab
+                      when: fstab_check.rc != 0
+                      register: fstab_append
+                      ansible.builtin.lineinfile:
+                        path: /etc/fstab
+                        line: "/dev/vg_data/lv_data /var/lib/elasticsearch xfs defaults 0 2"
+                        create: true  # Ensures the file is created if it doesn't exist
+                        state: present
+                        mode: "0660"
+                    - name: Make sure if /dev/vg_data/lv_data is in /etc/fstab
+                      ansible.builtin.command: grep -e "^\/dev\/vg_data\/lv_data" /etc/fstab
+                      register: fstab_check
+                      changed_when: false
+                    - name: Reload systemd daemon to apply fstab changes
+                      when: fstab_append.changed
+                      ansible.builtin.systemd:
+                        daemon_reload: true
+                      # noqa: no-handler
+                    - name: Prepare mount
+                      when: fstab_check.rc == 0
+                      block:
+                        - name: Check if /var/lib/elasticsearch is mounted
+                          ansible.builtin.shell:
+                            cmd: set -o pipefail && mount | grep /var/lib/elasticsearch
+                            executable: /bin/bash
+                          register: mount_check
+                          changed_when: false
+                          failed_when: "mount_check.rc == 2"
+                          # noqa: command-instead-of-module
+                        - name: Mount /var/lib/elasticsearch if not mounted
+                          when: mount_check.rc != 0
+                          ansible.posix.mount:
+                            path: /var/lib/elasticsearch
+                            src: /dev/vg_data/lv_data
+                            fstype: xfs
+                            opts: defaults
+                            dump: 0
+                            passno: 2
+                            state: mounted
+                        - name: Make sure if /var/lib/elasticsearch is mounted
+                          ansible.builtin.shell:
+                            cmd: set -o pipefail && mount | grep /var/lib/elasticsearch
+                            executable: /bin/bash
+                          register: mount_check
+                          changed_when: false
+                          # noqa: command-instead-of-module

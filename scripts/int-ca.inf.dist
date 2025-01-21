@@ -1,0 +1,11 @@
+CN="ACME2 CA"
+OU="PT ACME2"
+O="PT ACME" # organizationName
+C="ID" # country ID
+ST="Jawa Timur" # stateOrProvinceName
+L="Surabaya" # localityName / City
+
+ca="root-ca"
+isCA="TRUE"
+KU="digitalSignature, keyCertSign, cRLSign"
+EKU="serverAuth, clientAuth"

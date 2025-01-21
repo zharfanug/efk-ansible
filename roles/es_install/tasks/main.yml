@@ -1,0 +1,152 @@
+---
+- name: Check if Elasticsearch is installed
+  ansible.builtin.shell: dpkg -l | grep '^ii' | grep -q elasticsearch
+  register: elasticsearch_installed
+  changed_when: false
+  failed_when: "elasticsearch_installed.rc == 2"
+  # noqa: risky-shell-pipe
+
+- name: Install Elasticsearch
+  when: elasticsearch_installed.rc != 0
+  block:
+    - name: Create /opt/es-installer directory
+      ansible.builtin.file:
+        path: /opt/es-installer
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Check if es installer exists
+      ansible.builtin.stat:
+        path: /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb
+      register: es_installer
+    - name: Copy es installer
+      ansible.builtin.copy:
+        src: "../files/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb"
+        dest: /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb
+        mode: '0644'
+      when: not es_installer.stat.exists
+      # noqa: no-relative-paths
+    - name: Check if es installer hash exists
+      ansible.builtin.stat:
+        path: /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512
+      register: es_installer_hash
+    - name: Copy es installer hash
+      ansible.builtin.copy:
+        src: "../files/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512"
+        dest: /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512
+        mode: '0644'
+      when: not es_installer_hash.stat.exists
+      # noqa: no-relative-paths
+    - name: Compute SHA-512 checksum of the downloaded .deb file
+      ansible.builtin.command:
+        cmd: "sha512sum /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb"
+      register: computed_checksum
+      changed_when: false
+    - name: Read the expected checksum from the .sha512 file
+      ansible.builtin.slurp:
+        src: /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512
+      register: expected_checksum_raw
+    - name: Decode the expected checksum
+      ansible.builtin.set_fact:
+        expected_checksum: "{{ expected_checksum_raw['content'] | b64decode | regex_replace('\\s.*', '') }}"
+    - name: Compare checksums and fail if they don't match
+      ansible.builtin.debug:
+        msg: "Checksums of elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb match! File is valid."
+      failed_when: computed_checksum.stdout.split()[0] != expected_checksum
+    - name: Ensure /var/lib/elasticsearch exists
+      ansible.builtin.file:
+        path: /var/lib/elasticsearch
+        state: directory
+        mode: '0755'
+    - name: Check if /var/lib/elasticsearch exists
+      ansible.builtin.stat:
+        path: /var/lib/elasticsearch
+      register: es_dir
+    - name: Check if Elasticsearch is in /etc/fstab
+      ansible.builtin.command: grep -q 'elasticsearch' /etc/fstab
+      register: fstab_check
+      changed_when: false
+      failed_when: "fstab_check.rc == 2"
+    - name: Check if /var/lib/elasticsearch is mounted
+      when:
+        - fstab_check.rc == 0
+        - es_dir.stat.exists
+      ansible.builtin.shell: mount | grep /var/lib/elasticsearch
+      register: mount_check
+      failed_when: "mount_check.rc == 2"
+      changed_when: false
+      # noqa: risky-shell-pipe
+      # noqa: command-instead-of-module
+    - name: Mount /var/lib/elasticsearch if not mounted
+      when:
+        - fstab_check.rc == 0
+        - es_dir.stat.exists
+        - mount_check.rc != 0
+      ansible.posix.mount:
+        path: /var/lib/elasticsearch
+        src: /dev/vg_data/lv_data
+        fstype: xfs
+        opts: defaults
+        dump: 0
+        passno: 2
+        state: mounted
+    - name: Find files and directories in /var/lib/elasticsearch
+      ansible.builtin.find:
+        paths: /var/lib/elasticsearch
+        file_type: any
+      register: files_to_delete
+      when: es_dir.stat.exists
+    - name: Delete files and directories inside /var/lib/elasticsearch
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: absent
+      with_items: "{{ files_to_delete.files }}"
+      when: es_dir.stat.exists
+      changed_when: files_to_delete.matched > 0
+    - name: Install Elasticsearch if not installed
+      ansible.builtin.command: dpkg -i /opt/es-installer/elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb
+      register: install_es_output
+      changed_when: true
+    # Change ownership of /var/lib/elasticsearch
+    - name: Set ownership of /var/lib/elasticsearch to elasticsearch
+      ansible.builtin.file:
+        path: /var/lib/elasticsearch
+        owner: elasticsearch
+        group: elasticsearch
+        recurse: true
+      when: es_dir.stat.exists
+    - name: Delete /tmp/elasticsearch_install_output.log if it exists
+      ansible.builtin.file:
+        path: /tmp/elasticsearch_install_output.log
+        state: absent
+      when: install_es_output.stdout != ''
+    - name: Save the Elasticsearch installation output
+      ansible.builtin.copy:
+        content: "{{ install_es_output.stdout }}"
+        dest: "/tmp/elasticsearch_install_output.log"
+        mode: '0600'
+      when: install_es_output.stdout != ''
+    - name: Extract Elasticsearch password
+      ansible.builtin.set_fact:
+        elastic_password: "{{ install_es_output.stdout | regex_search('password for the elastic built-in superuser is : (.+)', '\\1') | first | trim }}"
+    - name: Check if .env exists
+      ansible.builtin.stat:
+        path: /root/.env
+      register: env_file_stat
+    - name: Save Elasticsearch password to .env file if not exist
+      ansible.builtin.copy:
+        content: |
+          ELASTIC_PASSWORD="{{ elastic_password }}"
+        dest: /root/.env
+        mode: '0600'
+      when: not env_file_stat.stat.exists
+    - name: Update or add ELASTIC_PASSWORD in .env
+      ansible.builtin.shell: |
+        if grep -q '^ELASTIC_PASSWORD' /root/.env; then
+          sed -i 's/^ELASTIC_PASSWORD=.*/ELASTIC_PASSWORD="{{ elastic_password }}"/' /root/.env
+        else
+          echo "ELASTIC_PASSWORD={{ elastic_password }}" >> /root/.env
+        fi
+      when: env_file_stat.stat.exists
+      changed_when: true

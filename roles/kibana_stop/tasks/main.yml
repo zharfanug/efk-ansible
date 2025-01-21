@@ -1,0 +1,9 @@
+---
+- name: Gather the package facts
+  ansible.builtin.package_facts:
+
+- name: Stop kibana service if running
+  ansible.builtin.service:
+    name: kibana
+    state: stopped
+  when: "'kibana' in ansible_facts.packages"

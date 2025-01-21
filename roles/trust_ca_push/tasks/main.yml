@@ -1,0 +1,15 @@
+---
+- name: Copy all certificates from trust-ca to the trusted CA directory
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/usr/local/share/ca-certificates/{{ item | basename }}"
+    mode: '0644'
+    owner: root
+    group: root
+  with_fileglob:
+    - "../files/certs/trust-ca/*"
+
+- name: Update CA certificates
+  ansible.builtin.command:
+    cmd: update-ca-certificates
+  changed_when: false

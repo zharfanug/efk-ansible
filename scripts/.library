@@ -1,0 +1,671 @@
+INV_DIR="../inventory"
+FILES_DIR="../files"
+DIST_DIR="../dist"
+INV_FILE="${INV_DIR}/hosts"
+VARS_DIR="${INV_DIR}/group_vars"
+VARS_FILE="${VARS_DIR}/all.yml"
+NFT_BASE_DIR="${DIST_DIR}/base/nft"
+ES_INSTALLER_DIR="${FILES_DIR}/es-installer"
+LB_DIR="${FILES_DIR}/lb"
+KEEPALIVED_DIR="${LB_DIR}/keepalived"
+KEEPALIVED_KK_FILE="${KEEPALIVED_DIR}/kk"
+HAPROXY_CONF_DIR="${LB_DIR}/haproxy/conf.d"
+
+CERT_DIR="${FILES_DIR}/certs"
+CERT_ES_DIR="${CERT_DIR}/elasticsearch"
+CERT_KBN_DIR="${CERT_DIR}/kibana"
+CERT_FS_DIR="${CERT_DIR}/fleet"
+
+ES_="es"
+KBN_="kbn"
+FS_="fs"
+LB_="lb"
+
+encrypt_string() {
+  input="$1"
+  encrypted=""
+  allowed_char=("-" "_") # Array of allowed characters
+  for ((i = 0; i < ${#input}; i += 2)); do
+    pair="${input:i:2}"
+    ascii_sum=0
+    for ((j = 0; j < ${#pair}; j++)); do
+      ascii_val=$(printf "%d" "'${pair:j:1}")
+      ((ascii_sum += ascii_val))
+    done
+    encrypted_decimal=$(( (ascii_sum % 90) + 33 ))
+    encrypted_char=$(printf "\x$(printf %x "$encrypted_decimal")")
+
+    if ! [[ "$encrypted_char" =~ ^[a-zA-Z0-9]$ ]]; then
+      ascii_char=$(printf "%d" "'$encrypted_char")
+      allowed_char_count=${#allowed_char[@]} # Number of allowed characters
+      mod_char=$((ascii_char % allowed_char_count))
+      encrypted_char="${allowed_char[$mod_char]}"
+    fi
+    encrypted+="$encrypted_char"
+  done
+  echo "$encrypted"
+}
+gen_p31() {
+  err_help="Usage: gen_p31 <cert-name> <pem file>"
+  if [ -z "$1" ]; then
+    echo $err_help
+    return 1
+  fi
+  if [ -z "$2" ]; then
+    echo $err_help
+    return 1
+  fi
+  psha1=$(openssl x509 -in "${2}" | openssl sha1 | awk '{print $2}')
+  p10=$(openssl x509 -in "${2}" | sed -n '2p' | cut -c -10)
+  p31="${p10}$(echo $(encrypt_string $psha1) | cut -c -21)"
+  echo $p31
+}
+
+check_file() {
+  if [[ ! -f "$1" ]]; then
+    echo "Error: File \"${1}\" does not exist."
+    exit 1
+  fi
+}
+
+generate_keepalive() {
+  mkdir -p "${KEEPALIVED_DIR}"
+  if [ ! -f "$KEEPALIVED_KK_FILE" ]; then
+    head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16 > "$KEEPALIVED_KK_FILE"
+  fi
+  keepalived_key=$(cat "$KEEPALIVED_KK_FILE")
+}
+
+prep_hosts_list() {
+  mkdir -p "${VARS_DIR}"
+  cat > "$VARS_FILE" <<- EOF
+---
+ansible_ssh_port: $ssh_port
+ansible_python_interpreter: /usr/bin/python3
+ansible_user: root
+efk_ver: ${efk_ver}
+siem_url: ${siem_url}
+fleet_url: ${fleet_url}
+EOF
+
+  rm -f $INV_FILE >/dev/null 2>&1
+  touch $INV_FILE
+  generate_keepalive
+}
+
+make_hosts_list() {
+  echo "[$1]" >> $INV_FILE
+  cert="$ES_"
+  cert_pass=$(gen_p31 "${cert}" "${CERT_DIR}/${cert}.pem")
+  IFS=',' read -ra list_nodes <<< "$2"
+  for i in "${!list_nodes[@]}"; do
+    n="${list_nodes[$i]}"
+    node_id=$((i + 1))
+    if [[ $i -lt 10 ]]; then
+      node_id=$(printf "%02d" "$((i + 1))")
+    fi
+    custom_var=""
+    if [ "$1" == "$LB_" ]; then
+      state="BACKUP"
+      if [ "$node_id" == "01" ]; then
+        state="MASTER"
+      fi
+      custom_var="state=${state} priority=$((100 - (i * 10))) kk=${keepalived_key} lb_vs_ip=${lb_vs_ip} lb_vs_fqdn=${lb_vs_fqdn}"
+    elif [ "$1" == "$ES_" ]; then
+      host_string="p31=\"${cert_pass}\" es_cluster=${es_cluster}"
+      if [ "$node_id" == "01" ]; then
+        host_string="${host_string} nodeinit=true es_user=${es_user} es_pw=${es_pw}"
+      fi
+      custom_var="${host_string}"
+    elif [ "$1" == "$KBN_" ]; then
+      es_nodes='['
+      IFS=',' read -ra list_es <<< "$es_hostname"
+      for es_i in "${!list_es[@]}"; do
+        es_n="${list_es[$es_i]}"
+        es_id=$((i + 1))
+        es_node="https://${es_n}.${domain}:9200"
+        es_nodes="${es_nodes}\"${es_node}\","
+      done
+      es_nodes="${es_nodes::-1}]"
+      # es_nodes='["https://dc01-poc-ipc-es01.pss.net:9200","https://dc01-poc-ipc-es02.pss.net:9200","https://dc01-poc-ipc-es03.pss.net:9200"]'
+      custom_var="es_nodes='${es_nodes}'"
+    fi
+    echo "$1${node_id} ansible_host=${n} $custom_var" >> $INV_FILE
+  done
+}
+
+prepare_nft() {
+  rm -rf "${FILES_DIR}/${1}"
+  mkdir -p "${FILES_DIR}/${1}"
+  cp -rf $NFT_BASE_DIR "${FILES_DIR}/${1}" >/dev/null 2>&1
+  cat > "${FILES_DIR}/${1}/nft/nftables.d/base-nft-input.nft" <<- EOF
+#base-nft-input v1.2.2
+
+chain standard_input {
+  # Allow SSH traffic from locals
+  ip saddr @net_locals tcp dport ${ssh_port} accept
+
+  # Allow incoming ICMP traffic (including ping)
+  ip protocol icmp accept
+
+  # Allow localhost to access local
+  iifname "lo" accept
+}
+
+EOF
+  if [ "$1" == "$LB_" ]; then
+    cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
+chain custom_input {
+  # LB PORTS
+  ip saddr @net_locals tcp dport {9001,9004,9006} accept
+
+  # EFK STACK
+  ip saddr @net_locals tcp dport {443,8220,9200} accept
+
+  # VRRP
+  ip protocol 112 accept
+}
+
+EOF
+  elif [ "$1" == "$ES_" ]; then
+    cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-sets.nft" <<- EOF
+set es_nodes {
+  type ipv4_addr; flags interval;
+  elements = {
+EOF
+    IFS=',' read -ra list_nodes <<< "$es_ip"
+    for i in "${!list_nodes[@]}"; do
+      n="${list_nodes[$i]}"
+      node_id=$((i + 1))
+      if [[ $i -lt 10 ]]; then
+        node_id=$(printf "%02d" "$((i + 1))")
+      fi
+      echo "     ${n}, # node${node_id}" >> "${FILES_DIR}/${1}/nft/nftables.d/custom-sets.nft"
+    done
+    cat >> "${FILES_DIR}/${1}/nft/nftables.d/custom-sets.nft" <<- EOF
+  }
+}
+EOF
+
+    cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
+chain custom_input {
+  ip saddr @es_nodes tcp dport {9200,9300} accept
+  ip saddr @net_locals tcp dport {9200} accept
+}
+
+EOF
+  elif [ "$1" == "$KBN_" ]; then
+    cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
+chain custom_input {
+  ip saddr @net_locals tcp dport {5601} accept
+}
+
+EOF
+  elif [ "$1" == "$FS_" ]; then
+    cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
+chain custom_input {
+  ip saddr @net_locals tcp dport {9001,9004,9006} accept
+  ip saddr @net_locals tcp dport {8220} accept
+}
+
+EOF
+  fi
+}
+
+gen_cert() {
+  # Check if $1 exists
+  if [ -z "$1" ]; then
+    echo "Error: No argument provided. Exiting..."
+    exit 1
+  fi
+
+  # Check if $1 is a .inf file
+  if [ ! -f "$1" ]; then
+    echo "Error: Argument is not a .inf file. Exiting..."
+    exit 1
+  fi
+
+  source "$1"
+  inf_filename=$(basename "$1")
+  cert="${inf_filename%.*}"
+
+  req_vars=("ca" "CN" "isCA" "KU")
+  for req_var in "${req_vars[@]}"; do
+    # Check if the variable is unset or empty
+    if [ -z "${!req_var}" ]; then
+      echo "Error: Variable \$${req_var} is not set or is empty. Exiting..."
+      exit 1
+    fi
+  done
+  cert_dir="$CERT_DIR"
+  if [[ -n "$cert_path" ]]; then
+    cert_dir="$cert_path"
+  fi
+  ca_dir="$CERT_DIR"
+  if [[ -n "$ca_path" ]]; then
+    ca_dir="$ca_path"
+  fi
+  mkdir -p "$ca_dir"
+  mkdir -p "$cert_dir"
+
+  if ! [[ -n "$cert_key_algo" ]]; then
+    cert_key_algo="RSA"
+  fi
+  if ! [[ -n "$cert_cipher" ]]; then
+    cert_cipher="rsa_keygen_bits:4096"
+  fi
+  echo "Generating ${cert} .pem and .key"
+  openssl genpkey -algorithm ${cert_key_algo} -pkeyopt ${cert_cipher} -out "${cert_dir}/${cert}.key" >/dev/null 2>&1
+
+  if [[ "$cert" != "$ca" ]]; then
+    subject=$(openssl x509 -in "${ca_dir}/${ca}.pem" -noout -subject)
+    
+    [[ -z "$C" ]] && C=$(echo "$subject" | awk -F 'C = ' '{print $2}' | cut -d ',' -f1)
+    [[ -z "$ST" ]] && ST=$(echo "$subject" | awk -F 'ST = ' '{print $2}' | cut -d ',' -f1)
+    [[ -z "$L" ]] && L=$(echo "$subject" | awk -F 'L = ' '{print $2}' | cut -d ',' -f1)
+    [[ -z "$O" ]] && O=$(echo "$subject" | awk -F 'O = ' '{print $2}' | cut -d ',' -f1)
+    [[ -z "$OU" ]] && OU=$(echo "$subject" | awk -F 'OU = ' '{print $2}' | cut -d ',' -f1)
+  fi
+  cat > "${cert_dir}/${cert}.cnf" <<- EOF
+[ req ]
+prompt = no
+default_bits = 256
+default_md = sha256
+distinguished_name = req_distinguished_name
+x509_extensions = v3_req
+
+[ req_distinguished_name ]
+$([ -n "$C" ] && echo "countryName = $C")
+$([ -n "$ST" ] && echo "stateOrProvinceName = $ST")
+$([ -n "$L" ] && echo "localityName = $L")
+$([ -n "$OU" ] && echo "organizationalUnitName = $OU")
+$([ -n "$O" ] && echo "organizationName = $O")
+commonName = ${CN}
+
+[ v3_req ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer:always
+basicConstraints = CA:${isCA}
+keyUsage = ${KU}
+extendedKeyUsage = ${EKU}
+
+EOF
+  if [ "$isCA" == "FALSE" ]; then
+    cat >> "${cert_dir}/${cert}.cnf" <<- EOF
+subjectAltName = @alt_names
+
+[alt_names]
+EOF
+    echo "DNS.1 = ${CN}" >> "${cert_dir}/${cert}.cnf"
+    if [ -n "$DNS" ]; then
+    # Split the DNS addresses into an array
+    IFS=',' read -r -a ip_array <<< "$DNS"
+
+    # Loop through the array and construct DNS configuration lines
+    for ((i=0; i<${#ip_array[@]}; i++)); do
+        echo "DNS.$((i+2)) = ${ip_array[i]}" >> "${cert_dir}/${cert}.cnf"
+      done
+    fi
+
+    if [ -n "$IP" ]; then
+      # Split the IP addresses into an array
+      IFS=',' read -r -a ip_array <<< "$IP"
+
+      # Loop through the array and construct IP configuration lines
+      for ((i=0; i<${#ip_array[@]}; i++)); do
+        echo "IP.$((i+1)) = ${ip_array[i]}" >> "${cert_dir}/${cert}.cnf"
+      done
+    fi
+  fi
+
+  openssl req -new -key ${cert_dir}/${cert}.key -out ${cert_dir}/${cert}.csr -config ${cert_dir}/${cert}.cnf
+
+  cat > "${ca_dir}/${ca}.conf" <<- EOF
+[ ca ]
+prompt = no
+default_ca = CA_default
+
+[ CA_default ]
+dir               = $(realpath $ca_dir)
+new_certs_dir     = \$dir
+certificate       = \$dir/${ca}.pem
+database          = \$dir/${ca}.index
+private_key       = \$dir/${ca}.key
+serial            = \$dir/${ca}.srl
+unique_subject    = no
+default_days      = 7670
+default_md        = sha256
+default_bits      = 256
+policy            = CA_policy
+crlnumber         = $dir/${ca}.crlnumber
+default_crl_days  = 14
+certificate_filename = \$dir/test.pem
+
+[ CA_policy ]
+emailAddress = optional
+countryName = optional
+stateOrProvinceName = optional
+localityName = optional
+organizationalUnitName = optional
+organizationName = optional
+commonName = supplied
+EOF
+  
+  if [[ ! -f "${ca_dir}/${ca}.srl" ]]; then
+    ca_sha1=$(cat "${ca_dir}/${ca}.pem" | openssl sha1 | awk '{print toupper($NF)}')
+    echo $ca_sha1 > ${ca_dir}/${ca}.srl
+  fi
+  req_files=("index")
+  # req_files=("index" "srl")
+  for req_file in "${req_files[@]}"; do
+    if [[ ! -f "$ca_dir}/${ca}.${req_file}" ]]; then
+      touch "${ca_dir}/${ca}.${req_file}"
+    fi
+  done
+  if [[ "$cert" != "$ca" ]]; then
+    ca_sha1=$(cat ${ca_dir}/${ca}.srl)
+    openssl ca -notext -config "${ca_dir}/${ca}.conf" -in "${cert_dir}/${cert}.csr" -startdate 191231170000Z -enddate 401231165959Z -extensions v3_req -extfile "${cert_dir}/${cert}.cnf" -batch >/dev/null 2>&1
+  else
+    openssl ca -notext -config "${ca_dir}/${ca}.conf" -in "${cert_dir}/${cert}.csr" -startdate 191231170000Z -enddate 401231165959Z -selfsign -keyfile "${cert_dir}/${cert}.key" -extensions v3_req -extfile "${cert_dir}/${cert}.cnf" -batch >/dev/null 2>&1
+  fi
+  # ca_sha1=$(echo $cert_sha1)
+  openssl x509 -in ${ca_dir}/${ca_sha1}.pem -out ${cert_dir}/${cert}.pem >/dev/null 2>&1
+  if [[ "$cert" != "$ca" ]]; then
+    if [[ -f "${ca_dir}/${ca}_fullchain.pem" ]]; then
+      cat "${cert_dir}/${cert}.pem" "${ca_dir}/${ca}_fullchain.pem" > "${cert_dir}/${cert}_fullchain.pem"
+    else
+      cat "${cert_dir}/${cert}.pem" "${ca_dir}/${ca}.pem" > "${cert_dir}/${cert}_fullchain.pem"
+    fi
+  fi
+  rm ${ca_dir}/${ca_sha1}.pem
+}
+
+prepare_cert_dir() {
+  # rm -rf "$CERT_DIR"
+  mkdir -p "$CERT_DIR"
+}
+
+gen_inf() {
+  san_dns_list="${2},${lb_vs_fqdn},"
+  IFS=',' read -ra list_nodes <<< "$5"
+  for i in "${!list_nodes[@]}"; do
+    n="${list_nodes[$i]}"
+    node_id=$((i + 1))
+    if [[ $i -lt 10 ]]; then
+      node_id=$(printf "%02d" "$((i + 1))")
+    fi
+    san_dns_list="${san_dns_list}${n},"
+  done
+  IFS=',' read -ra list_nodes <<< "$3"
+  for i in "${!list_nodes[@]}"; do
+    n="${list_nodes[$i]}"
+    node_id=$((i + 1))
+    if [[ $i -lt 10 ]]; then
+      node_id=$(printf "%02d" "$((i + 1))")
+    fi
+    san_dns_list="${san_dns_list}${n},${n}.${domain},"
+  done
+  san_dns_list="${san_dns_list}localhost"
+  
+  san_ip_list=""
+  IFS=',' read -ra list_nodes <<< "$lb_ip"
+  for i in "${!list_nodes[@]}"; do
+    n="${list_nodes[$i]}"
+    node_id=$((i + 1))
+    if [[ $i -lt 10 ]]; then
+      node_id=$(printf "%02d" "$((i + 1))")
+    fi
+    san_ip_list="${san_ip_list}${n},"
+  done
+  IFS=',' read -ra list_nodes <<< "$4"
+  for i in "${!list_nodes[@]}"; do
+    n="${list_nodes[$i]}"
+    node_id=$((i + 1))
+    if [[ $i -lt 10 ]]; then
+      node_id=$(printf "%02d" "$((i + 1))")
+    fi
+    san_ip_list="${san_ip_list}${n},"
+  done
+  san_ip_list="${san_ip_list}${lb_vs_ip}"
+
+  cat > "${1}.inf" <<- EOF
+CN="${2}.${domain}"
+ca="int-ca"
+isCA="FALSE"
+KU="digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment"
+EKU="serverAuth, clientAuth"
+DNS="${san_dns_list}"
+IP="${san_ip_list}"
+EOF
+}
+
+gen_cert_and_inf() {
+  if [[ ! -f "${CERT_DIR}/${1}.pem" || ! -f "${CERT_DIR}/${1}.key" ]]; then
+    rm -f "${1}.inf"
+    if [[ ! -f "${1}.inf" ]]; then
+      gen_inf "$1" "$2" "$3" "$4" "$5"
+    fi
+    gen_cert "${1}.inf"
+  fi
+}
+
+gen_cert_if_not() {
+  # Check if $1 exists
+  if [ -z "$1" ]; then
+    echo "Error: No argument provided. Exiting..."
+    exit 1
+  fi
+
+  if [[ ! -f "${CERT_DIR}/${1}.pem" || ! -f "${CERT_DIR}/${1}.key" ]]; then
+    gen_cert "${1}.inf"
+  fi
+}
+
+gen_http_p12() {
+  mkdir -p "${CERT_ES_DIR}"
+  if [[ ! -f "${CERT_ES_DIR}/http.p12" ]]; then
+    root_ca="root-ca"
+    ca="int-ca"
+    ca_pass=$(gen_p31 "${ca}" "${CERT_DIR}/${ca}.pem")
+    # echo $ca_pass
+    openssl pkcs12 -export -in "${CERT_DIR}/${ca}_fullchain.pem" -inkey "${CERT_DIR}/${ca}.key" -out "${CERT_DIR}/${ca}.p12" -passout "pass:${ca_pass}" -name http_ca
+    # openssl pkcs12 -info -in "${CERT_DIR}/${ca}.p12" -passin "pass:${ca_pass}" -passout "pass:${ca_pass}"
+
+    cert="$ES_"
+    cert_pass=$(gen_p31 "${cert}" "${CERT_DIR}/${cert}.pem")
+    openssl pkcs12 -export -in "${CERT_DIR}/${cert}_fullchain.pem" -inkey "${CERT_DIR}/${cert}.key" -out "${CERT_DIR}/${cert}.p12" -passout "pass:${cert_pass}" -name http
+    cp "${CERT_DIR}/${cert}.p12" "${CERT_DIR}/http.p12"
+    keytool -importkeystore -srckeystore "${CERT_DIR}/${ca}.p12" -srcstoretype PKCS12 -srcstorepass "${ca_pass}" -destkeystore "${CERT_DIR}/http.p12" -deststoretype PKCS12 -deststorepass "${cert_pass}" -destkeypass "${cert_pass}" >/dev/null 2>&1
+    # openssl pkcs12 -info -in "${CERT_DIR}/http.p12" -passin "pass:${cert_pass}" -passout "pass:${cert_pass}"
+    # echo $cert_pass
+    # keytool -list -keystore "${CERT_DIR}/http.p12" -storetype PKCS12 -storepass "${cert_pass}"
+
+    cp "${CERT_DIR}/http.p12" "${CERT_ES_DIR}/"
+  fi
+}
+
+gen_transport_p12() {
+  mkdir -p "${CERT_ES_DIR}"
+  if [[ ! -f "${CERT_ES_DIR}/transport.p12" ]]; then
+    root_ca="root-ca"
+    cert="$ES_"
+    cert_pass=$(gen_p31 "${cert}" "${CERT_DIR}/${cert}.pem")
+    openssl pkcs12 -export -in "${CERT_DIR}/${cert}_fullchain.pem" -inkey "${CERT_DIR}/${cert}.key" -out "${CERT_DIR}/transport.p12" -passout "pass:${cert_pass}" -name transport
+    keytool -importcert -keystore "${CERT_DIR}/transport.p12" -storetype PKCS12 -storepass "${cert_pass}" -trustcacerts -noprompt -alias transport_ca -file "${CERT_DIR}/${root_ca}.pem" >/dev/null 2>&1
+    # echo $cert_pass
+    # keytool -list -keystore "${CERT_DIR}/transport.p12" -storetype PKCS12 -storepass "${cert_pass}"
+
+    cp "${CERT_DIR}/transport.p12" "${CERT_ES_DIR}/"
+  fi
+}
+
+gen_cert_es() {
+  gen_cert_and_inf "$ES_" "$es_cluster" "$es_hostname" "$es_ip" "${siem_url}"
+  gen_http_p12
+  gen_transport_p12
+}
+
+gen_cert_kbn() {
+  gen_cert_and_inf "$KBN_" "${hostname_prefix}-kibana" "$kbn_hostname" "$kbn_ip" "${siem_url}"
+  
+  cert="$KBN_"
+  mkdir -p "${CERT_DIR}/kibana"
+  cp "${CERT_DIR}/${cert}_fullchain.pem" "${CERT_DIR}/kibana/kibana.pem"
+  cp "${CERT_DIR}/${cert}.key" "${CERT_DIR}/kibana/kibana.key"
+}
+
+gen_cert_fs() {
+  gen_cert_and_inf "$FS_" "${hostname_prefix}-fleet" "$fs_hostname" "$fs_ip" "${fleet_url}"
+
+  cert="$FS_"
+  mkdir -p "${CERT_DIR}/fleet"
+  cp "${CERT_DIR}/int-ca_fullchain.pem" "${CERT_DIR}/fleet/chain.pem"
+  cp "${CERT_DIR}/root-ca.pem" "${CERT_DIR}/fleet/root-ca.pem"
+  cp "${CERT_DIR}/${cert}_fullchain.pem" "${CERT_DIR}/fleet/fleet.pem"
+  cp "${CERT_DIR}/${cert}.key" "${CERT_DIR}/fleet/fleet.key"
+}
+
+prepare_trust_ca() {
+  root_ca="root-ca"
+  mkdir -p "${CERT_DIR}/trust-ca"
+  cp "${CERT_DIR}/${root_ca}.pem" "${CERT_DIR}/trust-ca/${root_ca}.crt"
+  # cp "${CERT_DIR}/${ca}.pem" "${CERT_DIR}/trust-ca/${ca}.crt"
+}
+
+gen_cert_efk() {
+  prepare_cert_dir
+
+  gen_cert_if_not root-ca
+  gen_cert_if_not int-ca
+  
+  gen_cert_es
+  gen_cert_kbn
+  gen_cert_fs
+
+  prepare_trust_ca
+}
+
+es_installer_download() {
+  if [[ ! -f "$1" ]]; then
+    wget -O "$1" "$2"
+  fi
+  if [[ ! -f "${1}.sha512" ]]; then
+    wget -O "${1}.sha512" "$2.sha512"
+  fi
+  computed_hash=$(sha512sum "$1" | awk '{print $1}')
+  expected_hash=$(cat "${1}.sha512" | awk '{print $1}')
+  if [[ "$computed_hash" == "$expected_hash" ]]; then
+    echo "$1 SHA-512 hash matches"
+  else
+    echo "$1 SHA-512 hash does not match."
+    wget -O "$1" "$2"
+    es_installer_download "$1" "$2"
+  fi
+
+}
+
+prep_installer() {
+  mkdir -p "${ES_INSTALLER_DIR}"
+  es_pkg="elasticsearch-${efk_ver}-amd64.deb"
+  kibana_pkg="kibana-${efk_ver}-amd64.deb"
+  es_pkg_url="https://artifacts.elastic.co/downloads/elasticsearch/${es_pkg}"
+  kibana_pkg_url="https://artifacts.elastic.co/downloads/kibana/${kibana_pkg}"
+  ea_pkg="elastic-agent-${efk_ver}-linux-x86_64.tar.gz"
+  ea_pkg_url="https://artifacts.elastic.co/downloads/beats/elastic-agent/${ea_pkg}"
+
+  es_installer_download "${ES_INSTALLER_DIR}/${es_pkg}" "$es_pkg_url"
+  es_installer_download "${ES_INSTALLER_DIR}/${kibana_pkg}" "$kibana_pkg_url"
+  es_installer_download "${ES_INSTALLER_DIR}/${ea_pkg}" "$ea_pkg_url"
+}
+
+gen_lb_config() {
+  port=$1
+  f_port="$port"
+  b_port="$port"
+  if [[ "$port" == *:* ]]; then
+    # Split using ':' as the delimiter
+    f_port="${port%%:*}"  # Extract the first part
+    b_port="${port##*:}"  # Extract the second part
+  fi
+  cat > "${HAPROXY_CONF_DIR}/$(printf "%05d" $f_port)_${2}.cfg" <<- EOF
+frontend f_${2}
+  bind :${f_port}
+  default_backend b_${2}
+
+backend b_${2}
+EOF
+
+  if [ "$2" == "kibana" ] || [ "$2" == "fleet" ]; then
+    echo "  balance source" >> "${HAPROXY_CONF_DIR}/$(printf "%05d" $f_port)_${2}.cfg"
+  fi
+  IFS=',' read -ra list_nodes <<< "$3"
+  for i in "${!list_nodes[@]}"; do
+    n="${list_nodes[$i]}"
+    node_id=$((i + 1))
+    if [[ $i -lt 10 ]]; then
+      node_id=$(printf "%02d" "$((i + 1))")
+    fi
+    echo "  server $n ${n}.${domain}:$b_port" >> "${HAPROXY_CONF_DIR}/$(printf "%05d" $f_port)_${2}.cfg"
+  done
+}
+
+prep_lb_config() {
+  mkdir -p "$HAPROXY_CONF_DIR"
+  cat > "${HAPROXY_CONF_DIR}/00000_global.cfg" <<- EOF
+global
+  log /dev/log local0
+  log /dev/log local1 notice
+  chroot /var/lib/haproxy
+  stats socket /run/haproxy/admin.sock mode 660 level admin
+  stats timeout 30s
+  user haproxy
+  group haproxy
+  daemon
+
+defaults
+  log	global
+  mode tcp
+  option dontlognull
+  balance roundrobin
+  timeout connect 5s
+  timeout client  30s
+  timeout server  30s
+  option tcp-check
+  default-server check inter 10s
+  errorfile 400 /etc/haproxy/errors/400.http
+  errorfile 403 /etc/haproxy/errors/403.http
+  errorfile 408 /etc/haproxy/errors/408.http
+  errorfile 500 /etc/haproxy/errors/500.http
+  errorfile 502 /etc/haproxy/errors/502.http
+  errorfile 503 /etc/haproxy/errors/503.http
+  errorfile 504 /etc/haproxy/errors/504.http
+EOF
+}
+
+
+confirmation() {
+  siem_fullurl="https://$siem_url"
+  if [[ "$siem_port" != "443" ]]; then
+    siem_fullurl="https://${siem_url}:${siem_port}"
+  fi
+  cat << EOF
+$1
+SIEM Dashboard URL: $siem_fullurl
+Fleet Target URL: https://${fleet_url}:${fleet_port}
+
+Elasticsearch: [ $(echo $es_fqdn | sed 's/,/, /g') ]
+Kibana: [ $(echo $kbn_fqdn | sed 's/,/, /g') ]
+Fleet: [ $(echo $fs_fqdn | sed 's/,/, /g') ]
+EOF
+  read -rp "Confirm? [Y/n]: " confirm
+  confirm=${confirm:-y}
+  confirm=$(echo "$confirm" | tr '[:upper:]' '[:lower:]')
+
+  if [ "$confirm" == "y" ]; then
+    main
+  elif [ "$confirm" == "n" ]; then
+    echo Cancelled
+  else
+    confirmation
+  fi
+}

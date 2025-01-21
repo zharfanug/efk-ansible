@@ -1,0 +1,103 @@
+---
+- name: Create directory for Kibana certificates
+  ansible.builtin.file:
+    path: /etc/kibana/certs
+    state: directory
+    mode: "0750"
+    owner: "root"
+    group: "kibana"
+
+- name: Copy all required Kibana certificates
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/kibana/certs/{{ item | basename }}"
+    owner: "root"
+    group: "kibana"
+    mode: "0660"
+  with_fileglob:
+    - "../files/certs/kibana/*"
+
+- name: Ensure backup directory exists
+  ansible.builtin.file:
+    path: /etc/kibana/backup
+    state: directory
+    mode: "0750"
+    owner: "root"
+    group: "kibana"
+
+- name: Check if kibana.yml exists
+  ansible.builtin.stat:
+    path: /etc/kibana/kibana.yml
+  register: kibana_yml_stat
+
+- name: Backup kibana.yml
+  ansible.builtin.copy:
+    src: /etc/kibana/kibana.yml
+    dest: /etc/kibana/backup/kibana.yml_{{ ansible_date_time.date }}-{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.backup
+    remote_src: true
+    owner: root
+    group: kibana
+    mode: "0660"
+  when: kibana_yml_stat.stat.exists
+
+- name: Write the kibana.yml configuration file
+  ansible.builtin.copy:
+    dest: /etc/kibana/kibana.yml
+    content: |
+      server.host: "0.0.0.0"
+      server.name: "{{ ansible_hostname }}.{{ ansible_domain }}"
+      server.ssl.enabled: true
+      server.ssl.certificate: /etc/kibana/certs/kibana.pem
+      server.ssl.key: /etc/kibana/certs/kibana.key
+      server.publicBaseUrl: https://{{ siem_url }}
+
+      elasticsearch.hosts: ["{{ es_nodes | join('", "') }}"]
+      elasticsearch.serviceAccountToken: "{{ hostvars[groups['es'][0]].kibana_token }}"
+
+      elasticsearch.ssl.certificateAuthorities: [ "/etc/ssl/certs/ca-certificates.crt" ]
+
+      logging:
+        appenders:
+          file:
+            type: file
+            fileName: /var/log/kibana/kibana.log
+            layout:
+              type: json
+        root:
+          appenders:
+            - default
+            - file
+
+      pid.file: /run/kibana/kibana.pid
+
+      xpack.encryptedSavedObjects.encryptionKey: 03dcd53b1fa13d818cd71410f1891465
+      xpack.reporting.encryptionKey: f698c9f1ffd484f1be0b2ea3bee0d66a
+      xpack.security.encryptionKey: 105adec5892f78ed49351e498773a100
+
+    owner: root
+    group: kibana
+    mode: "0660"
+
+- name: Reload systemd daemon
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Enable Kibana service
+  ansible.builtin.service:
+    name: kibana
+    enabled: true
+
+- name: Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Restart kibana service if already running
+  when: ansible_facts.services['kibana.service'].state == 'running'
+  ansible.builtin.service:
+    name: kibana
+    state: restarted
+
+- name: Start kibana service
+  when: ansible_facts.services['kibana.service'].state != 'running'
+  ansible.builtin.service:
+    name: kibana
+    state: started

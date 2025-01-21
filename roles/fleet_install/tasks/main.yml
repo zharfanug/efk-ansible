@@ -1,0 +1,48 @@
+---
+- name: Check if Elastic Agent is installed
+  ansible.builtin.shell: dpkg -l | grep '^ii' | grep -q elastic-agent
+  register: ea_installed
+  changed_when: false
+  failed_when: "ea_installed.rc == 2"
+  # noqa: risky-shell-pipe
+
+- name: Push Elastic Agent Installer
+  when: ea_installed.rc != 0
+  block:
+    - name: Create directory for Fleet Certificates
+      ansible.builtin.file:
+        path: /etc/fleet/certs
+        state: directory
+        mode: "0755"
+        owner: "root"
+        group: "root"
+
+    - name: Copy all required Fleet certificates
+      ansible.builtin.copy:
+        src: "{{ item }}"
+        dest: "/etc/fleet/certs/{{ item | basename }}"
+        owner: "root"
+        group: "root"
+        mode: "0644"
+      with_fileglob:
+        - "../files/certs/fleet/*"
+
+    - name: Print install info
+      ansible.builtin.debug:
+        msg: "fs_svctoken: {{ hostvars[groups['es'][0]].fs_svctoken }}"
+
+    - name: Install Fleet Server
+      ansible.builtin.command: >
+        ./elastic-agent install -n
+        --url=https://"{{ ansible_hostname }}.{{ ansible_domain }}":8220
+        --fleet-server-es=https://{{ siem_url }}:9200
+        --fleet-server-service-token={{ hostvars[groups['es'][0]].fs_svctoken }}
+        --fleet-server-policy={{ hostvars[groups['es'][0]].fs_policy_id }}
+        --certificate-authorities=/etc/ssl/certs/ca-certificates.crt
+        --fleet-server-es-ca=/etc/fleet/certs/chain.pem
+        --fleet-server-cert=/etc/fleet/certs/fleet.pem
+        --fleet-server-cert-key=/etc/fleet/certs/fleet.key
+        --fleet-server-port=8220
+      args:
+        chdir: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64
+      changed_when: true

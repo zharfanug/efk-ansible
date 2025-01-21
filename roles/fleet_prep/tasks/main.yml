@@ -1,0 +1,197 @@
+---
+- name: Wait 60 seconds
+  ansible.builtin.pause:
+    seconds: 60
+
+- name: Set kibana_url
+  ansible.builtin.set_fact:
+    kibana_url: "https://{{ hostvars[groups['kbn'][0]].ansible_hostname }}.{{ hostvars[groups['kbn'][0]].ansible_domain }}:5601"
+- name: Debug kibana_url
+  ansible.builtin.debug:
+    msg: "{{ kibana_url }}"
+
+- name: Get Elasticsearch Information
+  ansible.builtin.uri:
+    url: "https://{{ siem_url }}:9200"
+    method: GET
+    url_username: "elastic"
+    url_password: "{{ elastic_password }}"
+    validate_certs: false  # Set to true if using valid SSL certificates
+    http_agent: "curl"
+  register: es_info
+- name: Debug
+  ansible.builtin.debug:
+    msg: "{{ es_info }}"
+
+- name: Check Kibana API Status
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} \
+      {{ kibana_url }}/api/status \
+      -H 'kbn-xsrf: true'
+  register: fs_api_status
+  # retries: 5              # Number of retry attempts
+  # delay: 30               # Delay (in seconds) between retries
+  # until: fs_api_status.rc == 0  # Retry until the return code (rc) is 0
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug fs_api_status
+  ansible.builtin.debug:
+    msg: "{{ (fs_api_status.stdout | from_json) }}"
+
+- name: Disable Kibana Telemetry
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} -X POST \
+      {{ kibana_url }}/internal/telemetry/optIn \
+      -H 'Content-Type: application/json' \
+      -H 'kbn-xsrf: true' \
+      --max-time 900 \
+      --connect-timeout 60 \
+      -d '{"enabled":false}'
+  register: kibana_telemetry_off
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug kibana_telemetry_off
+  ansible.builtin.debug:
+    msg: "{{ (kibana_telemetry_off.stdout | from_json) }}"
+
+- name: Wait 30 seconds
+  ansible.builtin.pause:
+    seconds: 30
+
+- name: Create Fleet Server Policy
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} -X POST \
+      {{ kibana_url }}/api/fleet/agent_policies?sys_monitoring=true \
+      -H 'Content-Type: application/json' \
+      -H 'kbn-xsrf: true' \
+      --max-time 900 \
+      --connect-timeout 60 \
+      -d '{
+        "name": "FS Policy",
+        "description": "",
+        "namespace": "default",
+        "monitoring_enabled": [
+          "logs",
+          "metrics",
+          "traces"
+        ],
+        "inactivity_timeout": 1209600,
+        "is_protected": false,
+        "has_fleet_server": true
+      }'
+  register: fs_policy_create
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug fs_policy_create
+  ansible.builtin.debug:
+    msg: "{{ fs_policy_create }}"
+- name: Set fs_policy_id fact
+  ansible.builtin.set_fact:
+    fs_policy_id: "{{ (fs_policy_create.stdout | from_json).item.id }}"
+- name: Debug fs_policy_id
+  ansible.builtin.debug:
+    msg: "{{ fs_policy_id }}"
+
+- name: Wait 10 seconds
+  ansible.builtin.pause:
+    seconds: 10
+
+- name: Create Fleet Server Target
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} -X POST \
+      {{ kibana_url }}/api/fleet/fleet_server_hosts \
+      -H 'Content-Type: application/json' \
+      -H 'kbn-xsrf: true' \
+      --max-time 900 \
+      --connect-timeout 60 \
+      -d '{"name":"{{ fleet_url }}","host_urls":["https://{{ fleet_url }}:8220"],"is_default":true}'
+  register: fs_target_create
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug fs_target_create
+  ansible.builtin.debug:
+    msg: "{{ (fs_target_create.stdout | from_json) }}"
+
+- name: Create ES Output
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} -X POST \
+      {{ kibana_url }}/api/fleet/outputs \
+      -H 'Content-Type: application/json' \
+      -H 'kbn-xsrf: true' \
+      --max-time 900 \
+      --connect-timeout 60 \
+      -d '{
+        "name":"{{ siem_url }}",
+        "type":"elasticsearch",
+        "hosts":["https://{{ siem_url }}:9200"],
+        "is_default":true,
+        "is_default_monitoring":true,
+        "preset":"balanced",
+        "config_yaml":"",
+        "ca_trusted_fingerprint":"",
+        "proxy_id":null
+      }'
+  register: es_output_create
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug es_output_create
+  ansible.builtin.debug:
+    msg: "{{ (es_output_create.stdout | from_json) }}"
+
+- name: Create Fleet Server service tokens
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} -X POST \
+      {{ kibana_url }}/api/fleet/service_tokens?remote=false \
+      -H 'Content-Type: application/json' \
+      --max-time 900 \
+      --connect-timeout 60 \
+      -H 'kbn-xsrf: true'
+  register: fs_svctoken_create
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug fs_svctoken_create
+  ansible.builtin.debug:
+    msg: "{{ (fs_svctoken_create.stdout | from_json) }}"
+- name: Set fs_svctoken fact
+  ansible.builtin.set_fact:
+    fs_svctoken: "{{ (fs_svctoken_create.stdout | from_json).value }}"
+- name: Debug fs_svctoken
+  ansible.builtin.debug:
+    msg: "{{ fs_svctoken }}"
+
+- name: Wait 10 seconds
+  ansible.builtin.pause:
+    seconds: 10
+
+- name: Create Linux Policy
+  ansible.builtin.shell: |
+    curl -s -k -u elastic:{{ elastic_password }} -X POST \
+      {{ kibana_url }}/api/fleet/agent_policies?sys_monitoring=true \
+      -H 'Content-Type: application/json' \
+      -H 'kbn-xsrf: true' \
+      --max-time 900 \
+      --connect-timeout 60 \
+      -d '{
+        "name": "Linux Policy",
+        "description": "",
+        "namespace": "default",
+        "monitoring_enabled": [
+          "logs",
+          "metrics",
+          "traces"
+        ],
+        "inactivity_timeout": 1209600,
+        "is_protected": false
+      }'
+  register: ea_policy_create
+  changed_when: true
+  # noqa: command-instead-of-module
+- name: Debug ea_policy_create
+  ansible.builtin.debug:
+    msg: "{{ ea_policy_create }}"
+- name: Set ea_policy_id fact
+  ansible.builtin.set_fact:
+    ea_policy_id: "{{ (ea_policy_create.stdout | from_json).item.id }}"
+- name: Debug ea_policy_id
+  ansible.builtin.debug:
+    msg: "{{ ea_policy_id }}"

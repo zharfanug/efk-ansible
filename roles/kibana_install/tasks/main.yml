@@ -1,0 +1,69 @@
+---
+- name: Check if Kibana is installed
+  ansible.builtin.shell: dpkg -l | grep '^ii' | grep -q kibana
+  register: kibana_installed
+  changed_when: false
+  failed_when: "kibana_installed.rc == 2"
+  # noqa: risky-shell-pipe
+
+- name: Install Kibana
+  when: kibana_installed.rc != 0
+  block:
+    - name: Create /opt/es-installer directory
+      ansible.builtin.file:
+        path: /opt/es-installer
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if Kibana installer exists
+      ansible.builtin.stat:
+        path: /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb
+      register: kibana_installer
+
+    - name: Copy Kibana installer
+      ansible.builtin.copy:
+        src: "../files/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb"
+        dest: /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb
+        mode: '0644'
+      when: not kibana_installer.stat.exists
+      # noqa: no-relative-paths
+
+    - name: Check if Kibana installer hash exists
+      ansible.builtin.stat:
+        path: /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512
+      register: es_kibana_hash
+
+    - name: Copy Kibana installer hash
+      ansible.builtin.copy:
+        src: "../files/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512"
+        dest: /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512
+        mode: '0644'
+      when: not es_kibana_hash.stat.exists
+      # noqa: no-relative-paths
+
+    - name: Compute SHA-512 checksum of the downloaded .deb file
+      ansible.builtin.command:
+        cmd: "sha512sum /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb"
+      register: computed_checksum
+      changed_when: false
+
+    - name: Read the expected checksum from the .sha512 file
+      ansible.builtin.slurp:
+        src: /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512
+      register: expected_checksum_raw
+
+    - name: Decode the expected checksum
+      ansible.builtin.set_fact:
+        expected_checksum: "{{ expected_checksum_raw['content'] | b64decode | regex_replace('\\s.*', '') }}"
+
+    - name: Compare checksums and fail if they don't match
+      ansible.builtin.debug:
+        msg: "Checksums of kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb match! File is valid."
+      failed_when: computed_checksum.stdout.split()[0] != expected_checksum
+
+    - name: Install Kibana if not installed
+      ansible.builtin.command: dpkg -i /opt/es-installer/kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb
+      when: kibana_installed.rc != 0
+      changed_when: true

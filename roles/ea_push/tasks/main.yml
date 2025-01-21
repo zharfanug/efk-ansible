@@ -1,0 +1,72 @@
+---
+- name: Check if Elastic Agent is installed
+  ansible.builtin.shell: dpkg -l | grep '^ii' | grep -q elastic-agent
+  register: ea_installed
+  changed_when: false
+  failed_when: "ea_installed.rc == 2"
+  # noqa: risky-shell-pipe
+
+- name: Push Elastic Agent Installer
+  when: ea_installed.rc != 0
+  block:
+    - name: Create /opt/es-installer directory
+      ansible.builtin.file:
+        path: /opt/es-installer
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Check if Elastic Agent installer exists
+      ansible.builtin.stat:
+        path: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz
+      register: ea_installer
+
+    - name: Copy Elastic Agent installer
+      ansible.builtin.copy:
+        src: "../files/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz"
+        dest: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz
+        mode: '0644'
+      when: not ea_installer.stat.exists
+      # noqa: no-relative-paths
+
+    - name: Check if Elastic Agent installer hash exists
+      ansible.builtin.stat:
+        path: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz.sha512
+      register: ea_installer_hash
+
+    - name: Copy Elastic Agent installer hash
+      ansible.builtin.copy:
+        src: "../files/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz.sha512"
+        dest: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz.sha512
+        mode: '0644'
+      when: not ea_installer_hash.stat.exists
+      # noqa: no-relative-paths
+
+    - name: Compute SHA-512 checksum of the downloaded .deb file
+      ansible.builtin.command:
+        cmd: "sha512sum /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz"
+      register: computed_checksum
+      changed_when: false
+
+    - name: Read the expected checksum from the .sha512 file
+      ansible.builtin.slurp:
+        src: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz.sha512
+      register: expected_checksum_raw
+
+    - name: Decode the expected checksum
+      ansible.builtin.set_fact:
+        expected_checksum: "{{ expected_checksum_raw['content'] | b64decode | regex_replace('\\s.*', '') }}"
+
+    - name: Compare checksums and fail if they don't match
+      ansible.builtin.debug:
+        msg: "Checksums of elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz match! File is valid."
+      failed_when: computed_checksum.stdout.split()[0] != expected_checksum
+
+    - name: Extract Elastic Agent .tar.gz file
+      ansible.builtin.unarchive:
+        src: /opt/es-installer/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz
+        dest: /opt/es-installer/
+        remote_src: true
+        mode: '0755'
+      when: computed_checksum.stdout.split()[0] == expected_checksum

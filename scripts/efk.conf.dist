@@ -1,0 +1,55 @@
+# DONT USE SPACE BETWEEN COMMA!! these values will directly read by shell intepreter
+
+hostname_prefix="acme-siem"
+domain="acme.com"
+ssh_port=22
+efk_ver="8.16.2"
+
+siem_url="${hostname_prefix}.${domain}"
+siem_port=443
+fleet_url="${hostname_prefix}-fleet.${domain}"
+fleet_port=8220
+
+# Elasticsearch Superuser
+es_user=""
+es_pw="" #b64
+
+es_ip="192.168.1.14,192.168.1.15,192.168.1.16"
+# Kibana IP
+kbn_ip=192.168.1.17,192.168.1.18
+# Fleet Server IP
+fs_ip="192.168.1.19,100.100.25.90"
+# Load Balancer IP
+lb_ip="192.168.1.11,192.168.1.12"
+lb_vs_ip="192.168.1.13"
+
+
+
+
+
+
+# Predefined Settings | No need to change | Only change if you know what you are doing!
+# Elastic Settings
+es_prefix="es"
+es_cluster="${hostname_prefix}-elastic"
+es_hostname="${hostname_prefix}-${es_prefix}01,${hostname_prefix}-${es_prefix}02,${hostname_prefix}-${es_prefix}03"
+es_fqdn="${hostname_prefix}-${es_prefix}01.${domain},${hostname_prefix}-${es_prefix}02.${domain},${hostname_prefix}-${es_prefix}03.${domain}"
+es_port=9200
+es_cluster_port=9300
+
+# Kibana Settings
+kbn_prefix="kbn"
+kbn_hostname="${hostname_prefix}-${kbn_prefix}01,${hostname_prefix}-${kbn_prefix}02"
+kbn_fqdn="${hostname_prefix}-${kbn_prefix}01.${domain},${hostname_prefix}-${kbn_prefix}02.${domain}"
+kbn_port=5601
+
+# Fleet Server Settings
+fs_prefix="fs"
+fs_hostname="${hostname_prefix}-${fs_prefix}01,${hostname_prefix}-${fs_prefix}02"
+fs_fqdn="${hostname_prefix}-${fs_prefix}01.${domain},${hostname_prefix}-${fs_prefix}02.${domain}"
+fs_port=8220
+
+lb_prefix="lb"
+lb_hostname="${hostname_prefix}-${lb_prefix}01,${hostname_prefix}-${lb_prefix}02"
+lb_fqdn="${hostname_prefix}-${lb_prefix}01.${domain},${hostname_prefix}-${lb_prefix}02.${domain}"
+lb_vs_fqdn="${hostname_prefix}-${lb_prefix}.${domain}"
