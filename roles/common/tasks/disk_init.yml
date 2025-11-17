@@ -12,7 +12,6 @@
   failed_when: "xfs_installed.rc == 2"
 
 - name: Install xfsprogs if not present
-  run_once: true
   when: xfs_installed.rc != 0
   ansible.builtin.package:
     name:
@@ -34,7 +33,6 @@
   failed_when: "lvm_installed.rc == 2"
 
 - name: Install lvm2 if not present
-  run_once: true
   when: lvm_installed.rc != 0
   ansible.builtin.package:
     name:
