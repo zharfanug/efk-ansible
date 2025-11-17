@@ -7,6 +7,10 @@
          | selectattr('value.partitions','equalto',{})
          | json_query('[].{name: key, size: value.size}') }}
 
+- name: Debug raw disks
+  ansible.builtin.debug:
+    var: raw_disks
+
 - name: Set hot/warm disks
   ansible.builtin.set_fact:
     disks:
