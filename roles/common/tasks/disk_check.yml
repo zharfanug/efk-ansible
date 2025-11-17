@@ -1,0 +1,18 @@
+- name: List raw disks with name and size
+  ansible.builtin.set_fact:
+    raw_disks: >-
+      {{ ansible_devices
+         | dict2items
+         | selectattr('key','match','^(sd|nvme)')
+         | selectattr('value.partitions','equalto',{})
+         | json_query('[].{name: key, size: value.size}') }}
+
+- name: Set hot/warm disks
+  ansible.builtin.set_fact:
+    disks:
+      hot: "{{ raw_disks | selectattr('size', 'in', data_tier.hot.size) | map(attribute='name') | list }}"
+      warm: "{{ raw_disks | selectattr('size', 'in', data_tier.warm.size) | map(attribute='name') | list }}"
+
+- name: Debug disks
+  ansible.builtin.debug:
+    var: disks

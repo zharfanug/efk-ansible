@@ -1,0 +1,11 @@
+---
+- name: Check EFK Deployment
+  hosts: all
+  become: true
+  any_errors_fatal: true
+  tasks:
+    - name: Init disk
+      when: "'es' in group_names"
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: disk_check

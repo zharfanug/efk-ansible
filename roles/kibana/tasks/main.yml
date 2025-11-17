@@ -1,4 +1,5 @@
 - name: Init Nftables
+  when: enable_nftables | default(false) | bool
   ansible.builtin.include_tasks: nftables.yml
 
 - name: Check if Kibana is installed

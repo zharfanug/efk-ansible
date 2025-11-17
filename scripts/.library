@@ -91,6 +91,7 @@ ansible_ssh_port: $ssh_port
 ansible_user: $ssh_user
 domain: ${domain}
 efk_ver: ${efk_ver}
+enable_nftables: ${enable_nftables}
 
 siem_url: ${siem_url}
 siem_port: ${siem_port}

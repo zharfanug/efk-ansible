@@ -11,6 +11,7 @@
       ansible.builtin.include_role:
         name: trust_ca_push
     - name: Deploy Nftables
+      when: enable_nftables | default(false) | bool
       ansible.builtin.include_role:
         name: nftables
 
@@ -35,6 +36,12 @@
     #     src: "{{ FILES_DIR }}/.env"
     #     dest: /root/.env
     #     mode: '0600'
+
+    - name: Init disk
+      when: "'es' in group_names"
+      ansible.builtin.include_role:
+        name: common
+        tasks_from: disk
 
     - name: Deploy Elasticsearch
       when: "'es' in group_names"

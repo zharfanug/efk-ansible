@@ -51,6 +51,11 @@ cp int-ca.inf.dist int-ca.inf
 ```
 Update `root-ca.inf` and `int-ca.inf` to match your needs.
 
+Run check to check external disk (optional)
+```bash
+./check.sh
+```
+
 ### 4. Deploy the Stack
 
 Run the installation script to deploy Elasticsearch, Kibana, Fleet, and agents:

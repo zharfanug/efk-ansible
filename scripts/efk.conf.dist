@@ -4,7 +4,8 @@ hostname_prefix="acme-siem-"
 domain="acme.com"
 ssh_user=root
 ssh_port=22
-efk_ver="8.16.2"
+efk_ver="9.2.1"
+enable_nftables="false"
 
 siem_url="${hostname_prefix}.${domain}"
 siem_port=443
