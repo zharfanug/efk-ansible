@@ -4,7 +4,7 @@
 ip saddr @f2b-sshd drop
 
 # Allow SSH traffic from local
-ip saddr @net_locals tcp dport 10022 accept
+ip saddr @net_locals tcp dport {{ ansible_ssh_port }} accept
 
 # Allow DHCP client traffic from local
 ip saddr @net_locals udp dport 68 accept
