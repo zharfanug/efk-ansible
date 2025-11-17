@@ -131,6 +131,14 @@
     name: haproxy
     state: started
 
+- name: Create directory /etc/nginx/certs
+  ansible.builtin.file:
+    path: /etc/nginx/certs
+    state: directory
+    mode: "0755"
+    owner: "root"
+    group: "root"
+
 - name: Copy all required Fleet certificates
   ansible.builtin.copy:
     src: "{{ item }}"

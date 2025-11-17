@@ -1,0 +1,29 @@
+- name: Write /etc/nftables.d/custom-define.nft
+  when: nft_defines is defined
+  register: custom_defines_nft
+  ansible.builtin.lineinfile:
+    path: /etc/nftables.d/custom-define.nft
+    line: "define {{ nft_define.name }} = { {{ nft_define.ip }} }"
+    state: present
+    create: yes
+  loop: "{{ nft_defines }}"
+  loop_control:
+    loop_var: nft_define
+
+- name: Write /etc/nftables.d/custom-input.nft
+  register: custom_input_nft
+  ansible.builtin.lineinfile:
+    path: /etc/nftables.d/custom-input.nft
+    line: "ip saddr {{ nft_rule.saddr }} {{ nft_rule.proto }} dport { {{ nft_rule.ports }} } accept {% if nft_rule.desc is defined %}# {{ nft_rule.desc }}{% endif %}"
+    state: present
+    create: yes
+  loop: "{{ nft_rules }}"
+  loop_control:
+    loop_var: nft_rule
+
+- name: Restart nftables service
+  when: custom_input_nft.changed or custom_defines_nft.changed
+  ansible.builtin.service:
+    name: nftables
+    state: restarted
+  

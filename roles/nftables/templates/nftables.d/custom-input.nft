@@ -1,0 +1,2 @@
+# sample
+# ip saddr @net_locals tcp dport 80 accept

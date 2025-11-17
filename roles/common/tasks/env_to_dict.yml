@@ -1,0 +1,23 @@
+- name: Read .env
+  ansible.builtin.command:
+    cmd: cat "{{ env_path }}"
+  register: env_raw
+  changed_when: false
+
+- name: Convert remote env to dict
+  ansible.builtin.set_fact:
+    env_dict: >-
+      {{
+        ( 
+          "{" ~
+          (
+            env_raw.stdout_lines
+            | reject('match', '^(#|$)')
+            | map('regex_replace', '^([^=]+)=(.*)$', '\1: \2')
+            | map('regex_replace', '"', '')
+            | join(',')
+          )
+          ~ "}"
+        ) | from_yaml
+      }}
+      

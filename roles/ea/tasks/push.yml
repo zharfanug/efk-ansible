@@ -1,0 +1,18 @@
+- name: Copy Elastic Agent from Packages
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: pkg_copy
+  vars:
+    pkg_file: "elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz"
+    pkg_hash: "elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz.sha512"
+    hash_cmd: sha512sum
+
+- name: Elastic Agent Package Extract
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: pkg_extract
+  vars:
+    pkg_target_dir: "/opt/packages/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64"
+    pkg_zip_path: "/opt/packages/elastic-agent-{{ efk_ver | default('8.16.1') }}-linux-x86_64.tar.gz"
+    pkg_dst_dir: /opt/packages/
+

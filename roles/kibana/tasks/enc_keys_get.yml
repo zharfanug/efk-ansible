@@ -1,0 +1,55 @@
+- name: Read password from /root/.env
+  ansible.builtin.command:
+    cmd: cat /root/.env
+  register: env_file
+  changed_when: false
+
+- name: Set kbn_enc_so
+  when: env_file.stdout is search('KBN_ENC_SO=')
+  ansible.builtin.set_fact:
+    kbn_enc_so: "{{ env_file.stdout | regex_search('KBN_ENC_SO=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Set kbn_enc_report
+  when: env_file.stdout is search('KBN_ENC_REPORT=')
+  ansible.builtin.set_fact:
+    kbn_enc_report: "{{ env_file.stdout | regex_search('KBN_ENC_REPORT=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Set kbn_enc_sec
+  when: env_file.stdout is search('KBN_ENC_SEC=')
+  ansible.builtin.set_fact:
+    kbn_enc_sec: "{{ env_file.stdout | regex_search('KBN_ENC_SEC=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Generate kibana encryption keys
+  when: kbn_enc_so is not defined or kbn_enc_report is not defined or kbn_enc_sec is not defined
+  ansible.builtin.command: /usr/share/kibana/bin/kibana-encryption-keys generate
+  register: kibana_encryption_keys
+  changed_when: false
+
+- name: Set kibana_encryption_key fact
+  when: kibana_encryption_keys.stdout is defined
+  ansible.builtin.set_fact:
+    kbn_enc_so: "{{ kibana_encryption_keys.stdout | regex_search('xpack.encryptedSavedObjects.encryptionKey: (.+)', '\\1') | first | trim }}"
+    kbn_enc_report: "{{ kibana_encryption_keys.stdout | regex_search('xpack.reporting.encryptionKey: (.+)', '\\1') | first | trim }}"
+    kbn_enc_sec: "{{ kibana_encryption_keys.stdout | regex_search('xpack.security.encryptionKey: (.+)', '\\1') | first | trim }}"
+
+- name: Save encryption keys to .env file
+  when: kibana_encryption_keys.stdout is defined
+  register: save_kbn_enc_keys
+  ansible.builtin.lineinfile:
+    path: /root/.env
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    create: yes
+  with_items:
+    - regexp: '^KBN_ENC_SO='
+      line: "KBN_ENC_SO=\"{{ kbn_enc_so }}\""
+    - regexp: '^KBN_ENC_REPORT='
+      line: "KBN_ENC_REPORT=\"{{ kbn_enc_report }}\""
+    - regexp: '^KBN_ENC_SEC='
+      line: "KBN_ENC_SEC=\"{{ kbn_enc_sec }}\""
+
+- name: Fetch .env file after update
+  when: kibana_encryption_keys.stdout is defined
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: env_fetch

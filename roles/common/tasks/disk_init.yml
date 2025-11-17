@@ -1,0 +1,56 @@
+- name: Check if xfsprogs is installed
+  ansible.builtin.command: >
+    {% if ansible_os_family == 'Debian' %}
+      dpkg -s xfsprogs
+    {% elif ansible_os_family == 'RedHat' %}
+      rpm -q xfsprogs
+    {% else %}
+      command -v xfs_db
+    {% endif %}
+  register: xfs_installed
+  changed_when: false
+  failed_when: "xfs_installed.rc == 2"
+
+- name: Install xfsprogs if not present
+  run_once: true
+  when: xfs_installed.rc != 0
+  ansible.builtin.package:
+    name:
+      - xfsprogs
+    state: present
+    update_cache: true
+
+- name: Install xfsprogs if not present
+  when: xfs_installed.rc != 0
+  ansible.builtin.package:
+    name:
+      - xfsprogs
+    state: present
+    update_cache: true
+
+- name: List raw disks with name and size
+  ansible.builtin.set_fact:
+    raw_disks: >-
+      {{ ansible_devices
+         | dict2items
+         | selectattr('key','match','^(sd|nvme)')
+         | selectattr('value.partitions','equalto',{})
+         | json_query('[].{name: key, size: value.size}') }}
+
+- name: Set hot/warm disks
+  ansible.builtin.set_fact:
+    disks:
+      hot: "{{ raw_disks | selectattr('size', 'in', data_tier.hot.size) | map(attribute='name') | list }}"
+      warm: "{{ raw_disks | selectattr('size', 'in', data_tier.warm.size) | map(attribute='name') | list }}"
+
+- name: Init {{ tier }} disks
+  when: disks[tier] | length > 0
+  ansible.builtin.include_tasks: lvg_init.yml
+  vars:
+    tier: hot
+
+- name: Init {{ tier }} disks
+  when: disks[tier] | length > 0
+  ansible.builtin.include_tasks: lvg_init.yml
+  vars:
+    tier: warm

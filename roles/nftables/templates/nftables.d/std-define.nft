@@ -1,4 +1,4 @@
-#base-nft-define v1.2.1
+# std-define v1.2.1
 
 define rfc1918_24 = 10.0.0.0/8
 define rfc1918_20 = 172.16.0.0/12

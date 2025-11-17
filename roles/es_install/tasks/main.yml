@@ -1,4 +1,19 @@
 ---
+- name: Check if /mnt/data/hot is exists
+  ansible.builtin.stat:
+    path: /mnt/data/hot
+  register: mount_es
+
+- name: Mount data
+  when: mount_es.stat.exists
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: mount
+  loop:
+    - [ "/mnt/data/hot/elasticsearch", "/var/lib/elasticsearch" ]
+  loop_control:
+    loop_var: mount_data
+
 - name: Check if Elasticsearch is installed
   ansible.builtin.shell: dpkg -l | grep '^ii' | grep -q elasticsearch
   register: elasticsearch_installed

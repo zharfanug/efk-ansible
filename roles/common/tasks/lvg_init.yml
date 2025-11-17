@@ -1,0 +1,39 @@
+- name: Create physical volumes on raw disks
+  ansible.builtin.command: "pvcreate /dev/{{ item }}"
+  loop: "{{ disks[tier] }}"
+  register: pvcreate_result
+  changed_when: "'exists' not in pvcreate_result.stderr"
+  failed_when: pvcreate_result.rc != 0 and "'exists' not in pvcreate_result.stderr"
+
+- name: Create volume group vg_data_{{ tier }} with all raw PVs
+  community.general.lvg:
+    vg: "vg_data_{{ tier }}"
+    pvs: "{{ disks[tier] | map('regex_replace', '^', '/dev/') | list }}"
+
+- name: Create logical volume lv_data_{{ tier }} using all space
+  when: ansible_lvm.lvs.lv_data is not defined
+  community.general.lvol:
+    vg: "vg_data_{{ tier }}"
+    lv: "lv_data_{{ tier }}"
+    size: 100%FREE
+    resizefs: false
+
+- name: Create XFS filesystem with -K on /dev/vg_data_{{ tier }}/lv_data_{{ tier }}
+  ansible.builtin.filesystem:
+    fstype: xfs
+    dev: "/dev/vg_data_{{ tier }}/lv_data_{{ tier }}"
+    opts: "-K"
+
+- name: "Create /mnt/data/{{ tier }}"
+  ansible.builtin.file:
+    path: "/mnt/data/{{ tier }}"
+    state: directory
+    mode: '0755'
+
+- name: "Mount /mnt/data/{{ tier }}"
+  ansible.posix.mount:
+    path: "/mnt/data/{{ tier }}"
+    src: "/dev/vg_data_{{ tier }}/lv_data_{{ tier }}"
+    fstype: xfs
+    state: mounted
+    opts: defaults

@@ -1,0 +1,32 @@
+- name: Init Nftables
+  ansible.builtin.include_tasks: nftables.yml
+
+- name: Check if Elasticsearch is installed
+  ansible.builtin.command: >
+    {% if ansible_os_family == 'Debian' %}
+      dpkg -s elasticsearch
+    {% elif ansible_os_family == 'RedHat' %}
+      rpm -q elasticsearch
+    {% else %}
+      ls /usr/share/elasticsearch/bin/elasticsearch
+    {% endif %}
+  register: es_installed
+  changed_when: false
+  failed_when: "es_installed.rc == 2"
+
+- name: Install Elasticsearch
+  when: es_installed.rc != 0
+  ansible.builtin.include_tasks: install.yml
+
+- name: Init Elasticsearch
+  ansible.builtin.include_tasks: init.yml
+
+- name: Init API
+  when: inventory_hostname == groups['es'][0]
+  ansible.builtin.include_tasks: api_init.yml
+
+- name: Copy .env to all nodes
+  ansible.builtin.copy:
+    src: "{{ FILES_DIR }}/.env"
+    dest: /root/.env
+    mode: '0600'

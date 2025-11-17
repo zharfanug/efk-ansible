@@ -1,4 +1,10 @@
 #!/bin/bash
+
+SCRIPT_DIR=$(dirname "$(readlink -f "$0")")
+WORKSPACE_DIR=$(dirname "$SCRIPT_DIR")
+
+cd "$SCRIPT_DIR" || exit 1
+
 CONFIG_FILE="$1"
 
 # Check if first param not exist, and will auto fill it with k8s.conf
@@ -29,22 +35,26 @@ main() {
   make_hosts_list "$es_prefix" "$es_fqdn"
   make_hosts_list "$kbn_prefix" "$kbn_fqdn"
   make_hosts_list "$fs_prefix" "$fs_fqdn"
+  cat >> "$INV_FILE" <<- EOF
+[efk:children]
+lb
+es
+kbn
+fs
+[env:children]
+efk
+EOF
 
-  prepare_nft "$lb_prefix"
-  prepare_nft "$es_prefix"
-  prepare_nft "$kbn_prefix"
-  prepare_nft "$fs_prefix"
-
-  prep_lb_config
-  gen_lb_config "$es_port" "elasticsearch" $es_hostname
-  gen_lb_config "$siem_port:$kbn_port" "kibana" $kbn_hostname
-  # gen_lb_config "$fleet_port" "fleet" $fs_hostname
-  # gen_lb_config "9001" "paloalto" $fs_hostname
-  # gen_lb_config "9004" "fortigate" $fs_hostname
-  # gen_lb_config "9006" "juniper" $fs_hostname
+#   prep_lb_config
+#   gen_lb_config "$es_port" "elasticsearch" $es_hostname
+#   gen_lb_config "$siem_port:$kbn_port" "kibana" $kbn_hostname
+#   # gen_lb_config "$fleet_port" "fleet" $fs_hostname
+#   # gen_lb_config "9001" "paloalto" $fs_hostname
+#   # gen_lb_config "9004" "fortigate" $fs_hostname
+#   # gen_lb_config "9006" "juniper" $fs_hostname
 
   prep_installer
-  cd .. && \
+  cd "$WORKSPACE_DIR" || exit 1
   ansible-playbook playbooks/deploy_efk.yml
 }
 

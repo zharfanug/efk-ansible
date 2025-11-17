@@ -1,0 +1,42 @@
+- name: Set target directory and file
+  ansible.builtin.set_fact:
+    target_dir: "{{ file | dirname }}"
+    target_file: "{{ file | basename }}"
+
+# - debug:
+#     var: target_dir
+# - debug:
+#     var: target_file
+
+- name: Check if {{ target_dir }}/{{ target_file }} exists
+  ansible.builtin.stat:
+    path: "{{ target_dir }}/{{ target_file }}"
+  register: target_stat
+- name: Find existing {{ target_file }} backups
+  when: target_stat.stat.exists
+  ansible.builtin.find:
+    paths: "{{ target_dir }}/"
+    patterns: "{{ target_file }}_*.backup"
+    use_regex: false
+    file_type: file
+  register: target_backups
+- name: Get latest backup of {{ target_file }}
+  when: target_backups.files | length > 0
+  set_fact:
+    target_latest_backup: "{{ (target_backups.files | sort(attribute='mtime'))[-1].path }}"
+- name: Compare current {{ target_file }} with latest backup
+  when:
+    - target_stat.stat.exists
+    - target_latest_backup is defined
+  ansible.builtin.command: diff {{ target_dir }}/{{ target_file }} {{ target_latest_backup }}
+  register: backup_diff
+  changed_when: false
+  failed_when: false  # prevent task from failing on diff exit code
+- name: Backup {{ target_file }}
+  when:
+    - target_stat.stat.exists
+    - target_latest_backup is not defined or backup_diff.rc != 0
+  ansible.builtin.copy:
+    src: "{{ target_dir }}/{{ target_file }}"
+    dest: "{{ target_dir }}/{{ target_file }}_{{ ansible_date_time.date }}-{{ ansible_date_time.hour }}{{ ansible_date_time.minute }}.backup"
+    remote_src: true

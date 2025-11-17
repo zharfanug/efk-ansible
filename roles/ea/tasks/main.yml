@@ -1,0 +1,9 @@
+- name: Check if Elastic Agent is installed
+  ansible.builtin.command: ls /opt/Elastic/Agent/elastic-agent
+  register: ea_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install Elastic Agent
+  when: ea_installed.rc != 0
+  ansible.builtin.include_tasks: install.yml

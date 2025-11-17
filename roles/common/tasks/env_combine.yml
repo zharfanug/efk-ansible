@@ -1,0 +1,61 @@
+- name: Read remote .env
+  ansible.builtin.command:
+    cmd: cat /root/.env
+  register: remote_env_raw
+  changed_when: false
+
+- name: Convert remote env to dict
+  ansible.builtin.set_fact:
+    remote_env_dict: >-
+      {{
+        ( 
+          "{" ~
+          (
+            remote_env_raw.stdout_lines
+            | reject('match', '^(#|$)')
+            | map('regex_replace', '^([^=]+)=(.*)$', '\1: \2')
+            | map('regex_replace', '"', '')
+            | join(',')
+          )
+          ~ "}"
+        ) | from_yaml
+      }}
+      
+- name: Read local .env
+  delegate_to: localhost
+  ansible.builtin.command:
+    cmd: cat "{{ FILES_DIR }}/.env"
+  register: local_env_raw
+  changed_when: false
+
+- name: Convert remote env to dict
+  delegate_to: localhost
+  ansible.builtin.set_fact:
+    local_env_dict: >-
+      {{
+        ( 
+          "{" ~
+          (
+            local_env_raw.stdout_lines
+            | reject('match', '^(#|$)')
+            | map('regex_replace', '^([^=]+)=(.*)$', '\1: \2')
+            | map('regex_replace', '"', '')
+            | join(',')
+          )
+          ~ "}"
+        ) | from_yaml
+      }}
+
+- name: Merge envs
+  ansible.builtin.set_fact:
+    merged_env: "{{ local_env_dict | combine(remote_env_dict) }}"
+
+- name: Write merged .env locally
+  delegate_to: localhost
+  ansible.builtin.copy:
+    dest: "{{ FILES_DIR }}/.env"
+    content: |
+      {% for k, v in merged_env.items() %}
+      {{ k }}="{{ v }}"
+      {% endfor %}
+    mode: "0600"

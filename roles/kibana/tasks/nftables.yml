@@ -1,0 +1,8 @@
+- name: Init Nftables
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: nftables
+  vars:
+    nft_rules: [
+      {"proto": "tcp", "ports": "5601", "saddr": "@net_locals", "desc": "kbn"}
+    ]

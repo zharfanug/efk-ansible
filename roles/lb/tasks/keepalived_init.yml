@@ -1,0 +1,26 @@
+- name: Generate keepalived.conf
+  register: gen_keepalived_conf
+  ansible.builtin.template:
+    src: keepalived.conf.j2
+    dest: /etc/keepalived/keepalived.conf
+
+- name: Write /etc/nftables.d/custom-input.nft
+  register: vrrp_nft
+  ansible.builtin.lineinfile:
+    path: /etc/nftables.d/custom-input.nft
+    line: "ip protocol 112 accept"
+    state: present
+    create: yes
+
+- name: Restart nftables service
+  when: vrrp_nft.changed
+  ansible.builtin.service:
+    name: nftables
+    state: restarted
+
+- name: Start keepalived
+  when: gen_keepalived_conf.changed
+  ansible.builtin.service:
+    name: keepalived
+    state: restarted
+    enabled: true

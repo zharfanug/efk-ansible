@@ -1,0 +1,8 @@
+- name: Install Kibana from Packages
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: pkg_install
+  vars:
+    pkg_file: "kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb"
+    pkg_hash: "kibana-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512"
+    hash_cmd: sha512sum

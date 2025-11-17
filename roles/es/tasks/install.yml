@@ -1,0 +1,71 @@
+- name: Check if /mnt/data/hot is exists
+  ansible.builtin.stat:
+    path: /mnt/data/hot
+  register: mount_es
+
+- name: Mount data
+  when: mount_es.stat.exists
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: mount
+  loop:
+    - [ "/mnt/data/hot/elasticsearch", "/var/lib/elasticsearch" ]
+  loop_control:
+    loop_var: mount_data
+
+- name: Install Elasticsearch from Packages
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: pkg_install
+  vars:
+    pkg_file: "elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb"
+    pkg_hash: "elasticsearch-{{ efk_ver | default('8.16.1') }}-amd64.deb.sha512"
+    hash_cmd: sha512sum
+
+- name: Set ownership of /var/lib/elasticsearch to elasticsearch
+  ansible.builtin.file:
+    path: /var/lib/elasticsearch
+    owner: elasticsearch
+    group: elasticsearch
+    recurse: true
+
+# - debug:
+#     var: pkg_install_result
+
+- name: Extract Elasticsearch password
+  ansible.builtin.set_fact:
+    elastic_password: "{{ pkg_install_result.stdout | regex_search('password for the elastic built-in superuser is : (.+)', '\\1') | first | trim }}"
+
+# - debug:
+#     var: elastic_password
+
+- name: Check if .env exists
+  ansible.builtin.stat:
+    path: /root/.env
+  register: env_file_stat
+
+- name: Save Elasticsearch password to .env file if not exist
+  when: not env_file_stat.stat.exists
+  ansible.builtin.copy:
+    content: |
+      ELASTIC_PASSWORD="{{ elastic_password }}"
+    dest: /root/.env
+    mode: '0600'
+
+- name: Store Elasticsearch password in .env file
+  when: env_file_stat.stat.exists
+  ansible.builtin.lineinfile:
+    path: /root/.env
+    regexp: '^ELASTIC_PASSWORD='
+    line: "ELASTIC_PASSWORD=\"{{ elastic_password }}\""
+    create: true
+
+# - name: Update or add ELASTIC_PASSWORD in .env
+#   when: env_file_stat.stat.exists
+#   ansible.builtin.shell: |
+#     if grep -q '^ELASTIC_PASSWORD' /root/.env; then
+#       sed -i 's/^ELASTIC_PASSWORD=.*/ELASTIC_PASSWORD="{{ elastic_password }}"/' /root/.env
+#     else
+#       echo "ELASTIC_PASSWORD={{ elastic_password }}" >> /root/.env
+#     fi
+#   changed_when: true

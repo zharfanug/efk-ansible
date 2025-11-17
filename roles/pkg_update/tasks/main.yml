@@ -1,0 +1,15 @@
+- name: Update package cache
+  ansible.builtin.package:
+    update_cache: true
+- name: Upgrade and apply package for {{ ansible_os_family | lower if ansible_os_family | lower in ['debian'] else 'general' }}
+  ansible.builtin.include_tasks: "{{ ansible_os_family | lower if ansible_os_family | lower in ['debian'] else 'general' }}.yml"
+- name: Restart system if needed
+  when: upgrade_result.changed
+  ansible.builtin.reboot:
+    msg: "Rebooting system due to package upgrade"
+    connect_timeout: 300
+    reboot_timeout: 600
+  # noqa: no-handler
+- name: Remove unnecessary packages
+  ansible.builtin.package:
+    autoremove: true

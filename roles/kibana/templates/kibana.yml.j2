@@ -1,0 +1,33 @@
+server.host: "0.0.0.0"
+server.name: "{{ ansible_hostname }}.{{ ansible_domain }}"
+server.publicBaseUrl: https://{{ siem_url }}
+
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/certs/kibana.pem
+server.ssl.key: /etc/kibana/certs/kibana.key
+{% set es_nodes = [] %}
+{% for h in groups['es'] %}
+{% set _ = es_nodes.append("https://" ~ hostvars[h].ansible_hostname ~ '.' ~ hostvars[h].ansible_domain ~ ":9200") %}
+{% endfor %}
+
+elasticsearch.hosts: ["{{ es_nodes | list | join('", "') }}"]
+elasticsearch.serviceAccountToken: "{{ kibana_token }}"
+elasticsearch.ssl.certificateAuthorities: [ /etc/kibana/certs/ca.pem ]
+
+logging:
+  appenders:
+    file:
+      type: file
+      fileName: /var/log/kibana/kibana.log
+      layout:
+        type: json
+  root:
+    appenders:
+      - default
+      - file
+
+pid.file: /run/kibana/kibana.pid
+
+xpack.encryptedSavedObjects.encryptionKey: {{ kbn_enc_so }}
+xpack.reporting.encryptionKey: {{ kbn_enc_report }}
+xpack.security.encryptionKey: {{ kbn_enc_sec }}

@@ -1,0 +1,22 @@
+frontend f_{{port5}}_{{ svc_name }}
+{% if svc_bind is defined %}
+  {{ svc_bind }}
+{% else  %}
+  bind *:{{ svc_port }}
+{% endif %}
+{% if svc_fe_options is defined %}
+{% for fe_option in svc_fe_options %}
+  {{ fe_option }}
+{% endfor %}
+{% endif %}
+  default_backend b_{{ port5 }}_{{ svc_name }}
+
+backend b_{{ port5 }}_{{ svc_name }}
+{% if svc_be_options is defined %}
+{% for be_option in svc_be_options %}
+  {{ be_option }}
+{% endfor %}
+{% endif %}
+{% for node in groups[svc_group] %}
+  server {{ node }} {{ hostvars[node].ansible_hostname }}.{{ hostvars[node].ansible_domain }}:{{ be_port | default(svc_port) }} check
+{% endfor %}

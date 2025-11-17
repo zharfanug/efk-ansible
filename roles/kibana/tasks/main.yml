@@ -1,0 +1,26 @@
+- name: Init Nftables
+  ansible.builtin.include_tasks: nftables.yml
+
+- name: Check if Kibana is installed
+  ansible.builtin.command: >
+    {% if ansible_os_family == 'Debian' %}
+      dpkg -s kibana
+    {% elif ansible_os_family == 'RedHat' %}
+      rpm -q kibana
+    {% else %}
+      ls /usr/share/kibana
+    {% endif %}
+  register: kbn_installed
+  changed_when: false
+  failed_when: "kbn_installed.rc == 2"
+
+- name: Install Kibana
+  when: kbn_installed.rc != 0
+  ansible.builtin.include_tasks: install.yml
+
+- name: Init Kibana
+  ansible.builtin.include_tasks: init.yml
+
+- name: Init API
+  when: inventory_hostname == groups['kbn'][0]
+  ansible.builtin.include_tasks: api_init.yml

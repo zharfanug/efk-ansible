@@ -2,6 +2,7 @@
 
 hostname_prefix="acme-siem"
 domain="acme.com"
+ssh_user=root
 ssh_port=22
 efk_ver="8.16.2"
 
@@ -9,6 +10,7 @@ siem_url="${hostname_prefix}.${domain}"
 siem_port=443
 fleet_url="${hostname_prefix}-fleet.${domain}"
 fleet_port=8220
+lb_es_port=9200
 
 # Elasticsearch Superuser
 es_user=""

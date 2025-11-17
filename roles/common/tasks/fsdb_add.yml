@@ -1,0 +1,15 @@
+- name: Check if {{ dir_parent }} exists
+  ansible.builtin.stat:
+    path: "{{ dir_parent }}"
+  register: base_mount_stat
+
+- name: "Get fstype {{ dir_parent }}"
+  when: base_mount_stat.stat.exists
+  ansible.builtin.command: findmnt -no FSTYPE --target "{{ dir_parent }}"
+  register: base_mount_fstype
+  changed_when: false
+
+- name: "Update fsdb for {{ dir_parent }}"
+  when: base_mount_stat.stat.exists
+  ansible.builtin.set_fact:
+    fsdb: "{{ fsdb | combine( { dir_parent: base_mount_fstype.stdout.strip() | default('local') } ) }}"

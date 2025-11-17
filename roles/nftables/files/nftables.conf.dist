@@ -1,37 +1,43 @@
 #!/usr/sbin/nft -f
-#pss-nft-base v1.2.6
+# nft-base v1.3.0
 # THIS FILE IS MANAGED BY ADMINISTRATOR
 # DO NOT DIRECTLY EDIT THIS FILE AS IT WILL BE REPLACED UPON UPDATE!
-# EDIT /etc/nftables.d/custom-* INSTEAD.
+# EDIT /etc/nftables.d/custom-input.nft INSTEAD.
 
 # Flush the current ruleset
 table inet base-nft
 flush table inet base-nft
 
 include "/etc/nftables.d/custom-define.nft"
-include "/etc/nftables.d/base-nft-define.nft"
 
+include "/etc/nftables.d/std-define.nft"
 
 table inet base-nft {
   include "/etc/nftables.d/custom-sets.nft"
 
-  include "/etc/nftables.d/custom-input.nft"
+  chain custom_input {
+    include "/etc/nftables.d/custom-input.nft"
 
-  include "/etc/nftables.d/base-nft-sets.nft"
+  }
 
-  include "/etc/nftables.d/base-nft-input.nft"
+  include "/etc/nftables.d/std-sets.nft"
+
+  chain standard_input {
+    include "/etc/nftables.d/std-input.nft"
+
+  }
 
   # Inbound traffic policy
   chain input {
     # Drop all incoming traffic by default
     type filter hook input priority 0; policy drop;
+    # Allow incoming traffic related to established connections
+    ct state invalid drop
+    ct state {established, related} accept
 
     jump custom_input
 
     jump standard_input
 
-    # Allow incoming traffic related to established connections
-    ct state {established, related} accept
-    ct state invalid drop
   }
 }

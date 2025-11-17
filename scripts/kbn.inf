@@ -1,0 +1,7 @@
+CN="dc01-rnd-efk-kibana.pss.net"
+ca="int-ca"
+isCA="FALSE"
+KU="digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment"
+EKU="serverAuth, clientAuth"
+DNS="dc01-rnd-efk-kibana,dc01-rnd-efk-lb.pss.net,rnd-efk-vision.pss.net,dc01-rnd-efk-kbn01,dc01-rnd-efk-kbn01.pss.net,dc01-rnd-efk-kbn02,dc01-rnd-efk-kbn02.pss.net,localhost"
+IP="100.100.25.71,100.100.25.72,100.100.25.73,100.100.25.74,100.100.25.70"

@@ -1,0 +1,4 @@
+[Service]
+Environment="CONFIGDIR=/etc/haproxy/conf.d" "PIDFILE=/run/haproxy.pid" "EXTRAOPTS=-S /run/haproxy-master.sock"
+ExecStart=
+ExecStart=/usr/sbin/haproxy -Ws -f $CONFIGDIR -p $PIDFILE $EXTRAOPTS

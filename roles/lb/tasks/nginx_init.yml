@@ -1,0 +1,41 @@
+- name: Create directory /etc/nginx/certs
+  ansible.builtin.file:
+    path: /etc/nginx/certs
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Copy all required Fleet certificates
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/nginx/certs/{{ item | basename }}"
+    owner: "root"
+    group: "root"
+    mode: "0600"
+  with_fileglob:
+    - "{{ FILES_DIR }}/certs/fleet/*"
+
+- name: Backup original nginx.conf
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: backup
+  vars:
+    file: /etc/nginx/nginx.conf
+
+- name: Copy nginx.conf
+  register: copy_nginx_conf
+  ansible.builtin.copy:
+    src: nginx.conf.dist
+    dest: /etc/nginx/nginx.conf
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Restart nginx service if nginx.conf changed
+  when: copy_nginx_conf.changed
+  ansible.builtin.service:
+    name: nginx
+    state: restarted
+    enabled: true
+

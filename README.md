@@ -18,7 +18,7 @@ To set up the stack, follow these steps:
 Ensure you have the required dependencies installed on your system:
 ```bash
 sudo apt update -y
-sudo apt install -y default-jdk ansible
+sudo apt install -y default-jdk
 ```
 
 ### 2. Clone the Repository
@@ -27,12 +27,14 @@ Clone the `efk-ansible` repository to your local machine:
 ```bash
 git clone https://github.com/zharfanug/efk-ansible.git
 cd efk-ansible
+tools/init.sh
 ```
 
 ### 3. Prepare Configuration Files
 
 Navigate to the `scripts/` directory:
 ```bash
+source venv/bin/activate
 cd scripts/
 ```
 

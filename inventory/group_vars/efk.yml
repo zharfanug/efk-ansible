@@ -1,0 +1,5 @@
+data_tier:
+  hot:
+    size: [ '100.00 GB' ]
+  warm:
+    size: []

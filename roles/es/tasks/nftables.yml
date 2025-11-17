@@ -1,0 +1,12 @@
+- name: Init Nftables
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: nftables
+  vars:
+    nft_defines: [
+      {"name": "es", "ip": "{{ groups['es'] | map('extract', hostvars, 'ansible_default_ipv4') | map(attribute='address') | join(', ') }}"}
+    ]
+    nft_rules: [
+      {"proto": "tcp", "ports": "9200, 9300", "saddr": "$es", "desc": "es"},
+      {"proto": "tcp", "ports": "9200", "saddr": "@net_locals", "desc": "es"}
+    ]

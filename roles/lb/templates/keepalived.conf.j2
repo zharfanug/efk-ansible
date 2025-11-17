@@ -1,0 +1,16 @@
+vrrp_instance VI_1 {
+  state {{ "MASTER" if inventory_hostname == (groups['lb'] | first) else "BACKUP" }}
+  interface {{ ansible_facts.default_ipv4.interface }}
+  virtual_router_id {{ lb_vrid | default(51) }}
+  priority {{ (100 - ((groups['lb'].index(inventory_hostname) + 1) * 10)) | int }} # Higher value means higher priority
+  advert_int 1 # Advertisement interval in seconds
+
+  authentication {
+    auth_type PASS
+    auth_pass {{ keepalived_pass }} # only first 8 digits are accepted
+  }
+
+  virtual_ipaddress {
+    {{ lb_vs_ip }}
+  }
+}

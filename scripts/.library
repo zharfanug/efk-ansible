@@ -1,11 +1,15 @@
-INV_DIR="../inventory"
-FILES_DIR="../files"
-DIST_DIR="../dist"
+LIB_DIR=$(dirname "$(readlink -f "$0")")
+SCRIPTS_DIR=$(realpath $LIB_DIR)
+WORKSPACE_DIR=$(dirname "$SCRIPTS_DIR")
+
+INV_DIR="${WORKSPACE_DIR}/inventory"
+FILES_DIR="${WORKSPACE_DIR}/files"
+DIST_DIR="${WORKSPACE_DIR}/dist"
 INV_FILE="${INV_DIR}/hosts"
 VARS_DIR="${INV_DIR}/group_vars"
-VARS_FILE="${VARS_DIR}/all.yml"
+VARS_FILE="${VARS_DIR}/env.yml"
 NFT_BASE_DIR="${DIST_DIR}/base/nft"
-ES_INSTALLER_DIR="${FILES_DIR}/es-installer"
+ES_INSTALLER_DIR="${FILES_DIR}/packages"
 LB_DIR="${FILES_DIR}/lb"
 KEEPALIVED_DIR="${LB_DIR}/keepalived"
 KEEPALIVED_KK_FILE="${KEEPALIVED_DIR}/kk"
@@ -68,67 +72,56 @@ check_file() {
   fi
 }
 
-generate_keepalive() {
-  mkdir -p "${KEEPALIVED_DIR}"
-  if [ ! -f "$KEEPALIVED_KK_FILE" ]; then
-    head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16 > "$KEEPALIVED_KK_FILE"
-  fi
-  keepalived_key=$(cat "$KEEPALIVED_KK_FILE")
-}
+# generate_keepalive() {
+#   mkdir -p "${KEEPALIVED_DIR}"
+#   if [ ! -f "$KEEPALIVED_KK_FILE" ]; then
+#     head /dev/urandom | tr -dc A-Za-z0-9 | head -c 16 > "$KEEPALIVED_KK_FILE"
+#   fi
+#   keepalived_key=$(cat "$KEEPALIVED_KK_FILE")
+# }
 
 prep_hosts_list() {
   mkdir -p "${VARS_DIR}"
+  keepalived_pass=$(echo lb_vs_ip | openssl sha1 | awk '{print toupper($NF)}' | cut -c -8)
+  cert="$ES_"
+  cert_pass=$(gen_p31 "${cert}" "${CERT_DIR}/${cert}.pem")
   cat > "$VARS_FILE" <<- EOF
 ---
 ansible_ssh_port: $ssh_port
-ansible_python_interpreter: /usr/bin/python3
-ansible_user: root
+ansible_user: $ssh_user
+domain: ${domain}
 efk_ver: ${efk_ver}
+
 siem_url: ${siem_url}
+siem_port: ${siem_port}
+
 fleet_url: ${fleet_url}
+fleet_port: ${fleet_port}
+
+lb_es_port: ${lb_es_port}
+es_cluster: ${es_cluster}
+es_cert_p31: "${cert_pass}"
+es_user: ${es_user}
+es_pw: ${es_pw}
+
+lb_vs_ip: ${lb_vs_ip}
+lb_vs_fqdn: ${lb_vs_fqdn}
+keepalived_pass: ${keepalived_pass}
 EOF
 
   rm -f $INV_FILE >/dev/null 2>&1
   touch $INV_FILE
-  generate_keepalive
 }
 
 make_hosts_list() {
   echo "[$1]" >> $INV_FILE
   cert="$ES_"
-  cert_pass=$(gen_p31 "${cert}" "${CERT_DIR}/${cert}.pem")
   IFS=',' read -ra list_nodes <<< "$2"
   for i in "${!list_nodes[@]}"; do
     n="${list_nodes[$i]}"
     node_id=$((i + 1))
     if [[ $i -lt 10 ]]; then
       node_id=$(printf "%02d" "$((i + 1))")
-    fi
-    custom_var=""
-    if [ "$1" == "$LB_" ]; then
-      state="BACKUP"
-      if [ "$node_id" == "01" ]; then
-        state="MASTER"
-      fi
-      custom_var="state=${state} priority=$((100 - (i * 10))) kk=${keepalived_key} lb_vs_ip=${lb_vs_ip} lb_vs_fqdn=${lb_vs_fqdn}"
-    elif [ "$1" == "$ES_" ]; then
-      host_string="p31=\"${cert_pass}\" es_cluster=${es_cluster}"
-      if [ "$node_id" == "01" ]; then
-        host_string="${host_string} nodeinit=true es_user=${es_user} es_pw=${es_pw}"
-      fi
-      custom_var="${host_string}"
-    elif [ "$1" == "$KBN_" ]; then
-      es_nodes='['
-      IFS=',' read -ra list_es <<< "$es_hostname"
-      for es_i in "${!list_es[@]}"; do
-        es_n="${list_es[$es_i]}"
-        es_id=$((i + 1))
-        es_node="https://${es_n}.${domain}:9200"
-        es_nodes="${es_nodes}\"${es_node}\","
-      done
-      es_nodes="${es_nodes::-1}]"
-      # es_nodes='["https://dc01-poc-ipc-es01.pss.net:9200","https://dc01-poc-ipc-es02.pss.net:9200","https://dc01-poc-ipc-es03.pss.net:9200"]'
-      custom_var="es_nodes='${es_nodes}'"
     fi
     echo "$1${node_id} ansible_host=${n} $custom_var" >> $INV_FILE
   done
@@ -138,33 +131,36 @@ prepare_nft() {
   rm -rf "${FILES_DIR}/${1}"
   mkdir -p "${FILES_DIR}/${1}"
   cp -rf $NFT_BASE_DIR "${FILES_DIR}/${1}" >/dev/null 2>&1
-  cat > "${FILES_DIR}/${1}/nft/nftables.d/base-nft-input.nft" <<- EOF
-#base-nft-input v1.2.2
+  cat > "${FILES_DIR}/${1}/nft/nftables.d/std-input.nft" <<- EOF
+# std-input v1.2.3
 
-chain standard_input {
-  # Allow SSH traffic from locals
-  ip saddr @net_locals tcp dport ${ssh_port} accept
+# Block attacker ip from fail2ban
+ip saddr @f2b-sshd drop
 
-  # Allow incoming ICMP traffic (including ping)
-  ip protocol icmp accept
+# Allow SSH traffic from local
+ip saddr @net_locals tcp dport ${ssh_port} accept
 
-  # Allow localhost to access local
-  iifname "lo" accept
-}
+# Allow DHCP client traffic from local
+ip saddr @net_locals udp dport 68 accept
+
+# Allow incoming icmp/ping
+ip protocol icmp icmp type { echo-request } accept
+
+# Allow localhost to access local
+iifname "lo" accept
+
 
 EOF
   if [ "$1" == "$LB_" ]; then
     cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
-chain custom_input {
-  # LB PORTS
-  ip saddr @net_locals tcp dport {9001,9004,9006} accept
+# LB PORTS
+ip saddr @net_locals tcp dport {9001,9004,9006} accept
 
-  # EFK STACK
-  ip saddr @net_locals tcp dport {443,8220,9200} accept
+# EFK STACK
+ip saddr @net_locals tcp dport {443,8220,9200} accept
 
-  # VRRP
-  ip protocol 112 accept
-}
+# VRRP
+ip protocol 112 accept
 
 EOF
   elif [ "$1" == "$ES_" ]; then
@@ -188,25 +184,19 @@ EOF
 EOF
 
     cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
-chain custom_input {
-  ip saddr @es_nodes tcp dport {9200,9300} accept
-  ip saddr @net_locals tcp dport {9200} accept
-}
+ip saddr @es_nodes tcp dport {9200,9300} accept
+ip saddr @net_locals tcp dport {9200} accept
 
 EOF
   elif [ "$1" == "$KBN_" ]; then
     cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
-chain custom_input {
-  ip saddr @net_locals tcp dport {5601} accept
-}
+ip saddr @net_locals tcp dport {5601} accept
 
 EOF
   elif [ "$1" == "$FS_" ]; then
     cat > "${FILES_DIR}/${1}/nft/nftables.d/custom-input.nft" <<- EOF
-chain custom_input {
-  ip saddr @net_locals tcp dport {9001,9004,9006} accept
-  ip saddr @net_locals tcp dport {8220} accept
-}
+ip saddr @net_locals tcp dport {9001,9004,9006} accept
+ip saddr @net_locals tcp dport {8220} accept
 
 EOF
   fi
@@ -256,7 +246,6 @@ gen_cert() {
   fi
   echo "Generating ${cert} .pem and .key"
   openssl genpkey -algorithm ${cert_key_algo} -pkeyopt ${cert_cipher} -out "${cert_dir}/${cert}.key" >/dev/null 2>&1
-
   if [[ "$cert" != "$ca" ]]; then
     subject=$(openssl x509 -in "${ca_dir}/${ca}.pem" -noout -subject)
     
@@ -265,6 +254,11 @@ gen_cert() {
     [[ -z "$L" ]] && L=$(echo "$subject" | awk -F 'L = ' '{print $2}' | cut -d ',' -f1)
     [[ -z "$O" ]] && O=$(echo "$subject" | awk -F 'O = ' '{print $2}' | cut -d ',' -f1)
     [[ -z "$OU" ]] && OU=$(echo "$subject" | awk -F 'OU = ' '{print $2}' | cut -d ',' -f1)
+  fi
+  if [[ "$isCA" == "TRUE" ]]; then
+    BC="critical,CA:TRUE"
+  else
+    BC="CA:FALSE"
   fi
   cat > "${cert_dir}/${cert}.cnf" <<- EOF
 [ req ]
@@ -285,7 +279,7 @@ commonName = ${CN}
 [ v3_req ]
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always,issuer:always
-basicConstraints = CA:${isCA}
+basicConstraints = ${BC}
 keyUsage = ${KU}
 extendedKeyUsage = ${EKU}
 
@@ -350,18 +344,22 @@ organizationalUnitName = optional
 organizationName = optional
 commonName = supplied
 EOF
-  
   if [[ ! -f "${ca_dir}/${ca}.srl" ]]; then
-    ca_sha1=$(cat "${ca_dir}/${ca}.pem" | openssl sha1 | awk '{print toupper($NF)}')
-    echo $ca_sha1 > ${ca_dir}/${ca}.srl
+    if [[ "$ca" == "$cert" ]]; then
+      ca_sha1=$(echo $CN | openssl sha1 | awk '{print toupper($NF)}')
+    else
+      ca_sha1=$(cat "${ca_dir}/${ca}.pem" | openssl sha1 | awk '{print toupper($NF)}')
+    fi
+    echo $ca_sha1 > "${ca_dir}/${ca}.srl"
   fi
   req_files=("index")
   # req_files=("index" "srl")
   for req_file in "${req_files[@]}"; do
-    if [[ ! -f "$ca_dir}/${ca}.${req_file}" ]]; then
+    if [[ ! -f "${ca_dir}/${ca}.${req_file}" ]]; then
       touch "${ca_dir}/${ca}.${req_file}"
     fi
   done
+
   if [[ "$cert" != "$ca" ]]; then
     ca_sha1=$(cat ${ca_dir}/${ca}.srl)
     openssl ca -notext -config "${ca_dir}/${ca}.conf" -in "${cert_dir}/${cert}.csr" -startdate 191231170000Z -enddate 401231165959Z -extensions v3_req -extfile "${cert_dir}/${cert}.cnf" -batch >/dev/null 2>&1
@@ -503,33 +501,37 @@ gen_cert_es() {
   gen_cert_and_inf "$ES_" "$es_cluster" "$es_hostname" "$es_ip" "${siem_url}"
   gen_http_p12
   gen_transport_p12
+  cp "${CERT_DIR}/int-ca_fullchain.pem" "${CERT_ES_DIR}/ca.pem"
 }
 
 gen_cert_kbn() {
-  gen_cert_and_inf "$KBN_" "${hostname_prefix}-kibana" "$kbn_hostname" "$kbn_ip" "${siem_url}"
+  gen_cert_and_inf "$KBN_" "${hostname_prefix}kibana" "$kbn_hostname" "$kbn_ip" "${siem_url}"
   
   cert="$KBN_"
   mkdir -p "${CERT_DIR}/kibana"
   cp "${CERT_DIR}/${cert}_fullchain.pem" "${CERT_DIR}/kibana/kibana.pem"
   cp "${CERT_DIR}/${cert}.key" "${CERT_DIR}/kibana/kibana.key"
+  cp "${CERT_DIR}/int-ca_fullchain.pem" "${CERT_DIR}/kibana/ca.pem"
 }
 
 gen_cert_fs() {
-  gen_cert_and_inf "$FS_" "${hostname_prefix}-fleet" "$fs_hostname" "$fs_ip" "${fleet_url}"
+  gen_cert_and_inf "$FS_" "${hostname_prefix}fleet" "$fs_hostname" "$fs_ip" "${fleet_url}"
 
   cert="$FS_"
   mkdir -p "${CERT_DIR}/fleet"
-  cp "${CERT_DIR}/int-ca_fullchain.pem" "${CERT_DIR}/fleet/chain.pem"
-  cp "${CERT_DIR}/root-ca.pem" "${CERT_DIR}/fleet/root-ca.pem"
+  # cp "${CERT_DIR}/int-ca_fullchain.pem" "${CERT_DIR}/fleet/chain.pem"
+  # cp "${CERT_DIR}/root-ca.pem" "${CERT_DIR}/fleet/root-ca.pem"
   cp "${CERT_DIR}/${cert}_fullchain.pem" "${CERT_DIR}/fleet/fleet.pem"
   cp "${CERT_DIR}/${cert}.key" "${CERT_DIR}/fleet/fleet.key"
+  cp "${CERT_DIR}/int-ca_fullchain.pem" "${CERT_DIR}/fleet/ca.pem"
 }
 
 prepare_trust_ca() {
   root_ca="root-ca"
+  ca="int-ca"
   mkdir -p "${CERT_DIR}/trust-ca"
-  cp "${CERT_DIR}/${root_ca}.pem" "${CERT_DIR}/trust-ca/${root_ca}.crt"
-  # cp "${CERT_DIR}/${ca}.pem" "${CERT_DIR}/trust-ca/${ca}.crt"
+  cp "${CERT_DIR}/${root_ca}.pem" "${CERT_DIR}/trust-ca/efk_${root_ca}.crt"
+  cp "${CERT_DIR}/${ca}.pem" "${CERT_DIR}/trust-ca/efk_${ca}_fullchain.crt"
 }
 
 gen_cert_efk() {

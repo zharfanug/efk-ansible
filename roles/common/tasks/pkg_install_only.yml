@@ -1,0 +1,4 @@
+- name: Install {{ pkg_file }} 
+  ansible.builtin.apt:
+    deb: /opt/packages/{{ pkg_file }}
+  register: pkg_install_result

@@ -1,0 +1,10 @@
+CN="ACME Root CA"
+O="PT ACME" # organizationName
+C="ID" # country ID
+ST="DKI Jakarta" # stateOrProvinceName
+L="Jakarta" # localityName / City
+
+ca="root-ca"
+isCA="TRUE"
+KU="digitalSignature, keyCertSign, cRLSign"
+EKU="serverAuth, clientAuth"

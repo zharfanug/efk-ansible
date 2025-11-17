@@ -1,0 +1,9 @@
+- name: Configure TCP Services for {{ svc_name }} {{ svc_port }}
+  ansible.builtin.template:
+    src: tcp.cfg.j2
+    dest: "/etc/haproxy/conf.d/{{ port5 }}_{{ svc_name }}.cfg"
+    mode: "0644"
+    owner: root
+    group: root
+  vars:
+    port5: "{{ ('00000' ~ svc_port)[-5:] }}"

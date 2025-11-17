@@ -1,0 +1,296 @@
+- name: Read password from /root/.env
+  ansible.builtin.command:
+    cmd: cat /root/.env
+  register: env_file
+  changed_when: false
+
+- name: Set ELASTIC_PASSWORD fact
+  ansible.builtin.set_fact:
+    elastic_password: "{{ env_file.stdout | regex_search('ELASTIC_PASSWORD=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Login to Kibana
+  ansible.builtin.uri:
+    url: "https://localhost:5601/internal/security/login"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+    body_format: json
+    body:
+      providerType: "basic"
+      providerName: "basic"
+      currentURL: "https://localhost:5601/login"
+      params:
+        username: "elastic"
+        password: "{{ elastic_password }}"
+    validate_certs: false
+  register: kibana_login
+  retries: 30
+  delay: 3
+  until: kibana_login.status == 200
+
+- name: Disable Telemetry
+  ansible.builtin.uri:
+    url: "https://localhost:5601/internal/telemetry/optIn"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      elastic-api-version: "2"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    body_format: json
+    body:
+      enabled: false
+    validate_certs: false
+  register: telemetry_optout
+  retries: 30
+  delay: 3
+  until: telemetry_optout.status == 200
+
+- name: List all Policy
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/agent_policies"
+    method: GET
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    validate_certs: false
+  register: fleet_policies
+  retries: 30
+  delay: 3
+  until: fleet_policies.status == 200
+
+- name: Create Fleet Policies
+  when: ((fleet_policies.json['items'] | length == 0) or (fleet_policies.json['items'] | json_query('[?name==`' + policy_name + '`]') | length == 0))
+  ansible.builtin.include_tasks: api_policy_create.yml
+  loop:
+    - { policy_prefix: "FS", policy_name: "{{ fs_policy_name }}", policy_description: "Policy for Fleet Server" }
+    - { policy_prefix: "ES", policy_name: "{{ es_policy_name }}", policy_description: "Policy for Elasticsearch Server" }
+    - { policy_prefix: "KBN", policy_name: "{{ kbn_policy_name }}", policy_description: "Policy for Kibana Server" }
+    - { policy_prefix: "LB", policy_name: "{{ lb_policy_name }}", policy_description: "Policy for Load Balancer Server" }
+  loop_control:
+    loop_var: policy_item
+  vars:
+    policy_name: "{{ policy_item.policy_name }}"
+    policy_description: "{{ policy_item.policy_description }}"
+    has_fleet_server: "{{ policy_item.policy_name == fs_policy_name }}"
+    policy_prefix: "{{ policy_item.policy_prefix }}"
+
+# - name: Create Fleet Server Policy if not exists
+#   when: ((fleet_policies.json['items'] | length == 0) or (fleet_policies.json['items'] | json_query('[?name==`' + fs_policy_name + '`]') | length == 0))
+#   register: fs_policy_created
+#   ansible.builtin.uri:
+#     url: "https://localhost:5601/api/fleet/agent_policies?sys_monitoring=true"
+#     method: POST
+#     headers:
+#       Content-Type: "application/json"
+#       kbn-version: "{{ efk_ver }}"
+#       x-elastic-internal-origin: "Kibana"
+#       Cookie: "{{ kibana_login.set_cookie }}"
+#     body_format: json
+#     body:
+#       name: "{{ fs_policy_name }}"
+#       description: "Policy for Fleet Server"
+#       namespace: "default"
+#       monitoring_enabled:
+#         - "logs"
+#         - "metrics"
+#         - "traces"
+#       inactivity_timeout: 1209600
+#       is_protected: false
+#       has_fleet_server: true
+#     validate_certs: false
+#   retries: 30
+#   delay: 3
+#   until: fs_policy_created.status == 200
+
+# - name: Create Elasticsearch Policy
+#   when: (fleet_policies.json['items'] | length == 0) or (fleet_policies.json['items'] | json_query('[?name==`' + es_policy_name + '`]') | length == 0)
+#   register: es_policy_created
+#   ansible.builtin.uri:
+#     url: "https://localhost:5601/api/fleet/agent_policies"
+#     method: POST
+#     headers:
+#       Content-Type: "application/json"
+#       kbn-version: "{{ efk_ver }}"
+#       x-elastic-internal-origin: "Kibana"
+#       Cookie: "{{ kibana_login.set_cookie }}"
+#     body_format: json
+#     body:
+#       name: "{{ es_policy_name }}"
+#       description: "Policy for Elasticsearch Server"
+#       namespace: "default"
+#       monitoring_enabled:
+#         - "logs"
+#         - "metrics"
+#         - "traces"
+#       inactivity_timeout: 1209600
+#       is_protected: false
+#     validate_certs: false
+#   retries: 30
+#   delay: 3
+#   until: es_policy_created.status == 200
+
+# - name: Set fs_policy_id fact
+#   when:
+#     - fs_policy_created.json is defined
+#     - fs_policy_created.json.item is defined
+#     - fs_policy_created.json.item.id is defined
+#   ansible.builtin.set_fact:
+#     fs_policy_id: "{{ fs_policy_created.json.item.id }}"
+
+# - name: Set fs_policy_id fact
+#   when: ((fleet_policies.json['items'] | length >= 1) or (fleet_policies.json['items'] | json_query('[?name==`' + fs_policy_name + '`]') | length >= 1))
+#   ansible.builtin.set_fact:
+#     fs_policy_id: "{{ (fleet_policies.json['items'] | json_query('[?name==`' + fs_policy_name + '`]'))[0].id }}"
+
+# - debug:
+#     var: fs_policy_id
+
+- name: List elasticsearch outputs
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/outputs"
+    method: GET
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    validate_certs: false
+  register: es_outputs
+  retries: 30
+  delay: 3
+  until: es_outputs.status == 200
+
+- name: Create Elasticsearch Output
+  when: (es_outputs.json['items'] | length == 0) or (es_outputs.json['items'] | json_query('[?name==`' + siem_full_url + '`]') | length == 0)
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/outputs"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    body_format: json
+    body:
+      name: "{{ siem_full_url }}"
+      type: "elasticsearch"
+      hosts:
+        - "{{ siem_full_url }}"
+      is_default: true
+      is_default_monitoring: true
+      preset: "balanced"
+      config_yaml: ""
+      ca_trusted_fingerprint: ""
+      proxy_id: null
+    validate_certs: false
+  register: es_output_created
+  retries: 30
+  delay: 3
+  until: es_output_created.status == 200
+  vars:
+    siem_full_url: "https://{{ siem_url }}:{{ lb_es_port }}"
+
+# - debug:
+#     msg: "{{ es_output_created }}"
+
+- name: Read fs_token from .env file
+  ansible.builtin.command:
+    cmd: cat /root/.env
+  register: env_file
+  changed_when: false
+
+- name: Set fs_token fact
+  when: env_file.stdout is search('FS_TOKEN=')
+  ansible.builtin.set_fact:
+    fs_token: "{{ env_file.stdout | regex_search('FS_TOKEN=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Create fs service token
+  when: fs_token is not defined
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/service_tokens?remote=false"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    validate_certs: false
+  register: fs_service_token
+  retries: 30
+  delay: 3
+  until: fs_service_token.status == 200
+
+- name: Set fs_token fact
+  when:
+    - fs_service_token.json is defined
+    - fs_service_token.json.value is defined
+  ansible.builtin.set_fact:
+    fs_token: "{{ fs_service_token.json.value }}"
+
+- name: Save fs_token to .env file
+  when:
+    - fs_service_token.json is defined
+    - fs_service_token.json.value is defined
+  ansible.builtin.lineinfile:
+    path: /root/.env
+    regexp: '^FS_TOKEN='
+    line: "FS_TOKEN=\"{{ fs_token }}\""
+    create: true
+
+- name: Fetch .env file to local
+  when:
+    - fs_service_token.json is defined
+    - fs_service_token.json.value is defined
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: env_fetch
+
+- name: List fleet server hosts
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/fleet_server_hosts"
+    method: GET
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    validate_certs: false
+  register: fs_hosts
+  retries: 30
+  delay: 3
+  until: fs_hosts.status == 200
+
+- name: Create Fleet Server Host
+  when: (fs_hosts.json['items'] | length == 0) or (fs_hosts.json['items'] | json_query('[?name==`' + fs_host_name + '`]') | length == 0)
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/fleet_server_hosts"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    body_format: json
+    body:
+      name: "{{ fs_host_name }}"
+      host_urls:
+        - "{{ fs_host_name }}"
+      is_default: true
+      ssl:
+        certificate: ""
+        certificate_authorities: []
+        es_certificate: ""
+        es_certificate_authorities: []
+    validate_certs: false
+  register: fs_host_created
+  retries: 30
+  delay: 3
+  until: fs_host_created.status == 200
+  vars:
+    fs_host_name: "https://{{ fleet_url }}:{{ fleet_port }}"

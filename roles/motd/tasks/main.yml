@@ -1,0 +1,34 @@
+- name: Install zn-motd via remote script
+  ansible.builtin.shell: curl -s https://raw.githubusercontent.com/zharfanug/zn-motd/latest/install.sh | sh
+
+- name: Get Public IP
+  ansible.builtin.uri:
+    url: "https://ifconfig.co/json"
+    method: GET
+    headers:
+      Content-Type: "application/json"
+      X-Requested-By: "curl"
+    body_format: json
+  register: get_public_ip
+  retries: 30
+  delay: 5
+  until: get_public_ip.status == 200
+
+- name: Delete {{ ansible_env['HOME'] }}/.zn-motd
+  ansible.builtin.file:
+    path: "{{ ansible_env['HOME'] }}/.zn-motd"
+    state: absent
+
+- name: Make sure {{ ansible_env['HOME'] }}/.zn-motd exists
+  ansible.builtin.file:
+    path: "{{ ansible_env['HOME'] }}/.zn-motd"
+    state: directory
+
+- name: Write Public IP to File
+  ansible.builtin.copy:
+    content: "{{ get_public_ip.json.ip }} {{ get_public_ip.json.asn_org }}"
+    dest: "{{ ansible_env['HOME'] }}/.zn-motd/zn-motd-pub-ip_{{ ansible_date_time.date | regex_replace('-', '') }}"
+
+- name: Run motd
+  ansible.builtin.command: motd
+  changed_when: false

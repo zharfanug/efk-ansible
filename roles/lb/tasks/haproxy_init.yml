@@ -1,0 +1,81 @@
+- name: Create directory for haproxy configuration
+  ansible.builtin.file:
+    path: /etc/haproxy/conf.d
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Create directory for haproxy override service
+  ansible.builtin.file:
+    path: /etc/systemd/system/haproxy.service.d
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Copy haproxy override service file
+  register: haproxy_override_service
+  ansible.builtin.copy:
+    src: haproxy-override.conf.service
+    dest: /etc/systemd/system/haproxy.service.d/override.conf
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Backup original haproxy.cfg
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: backup
+  vars:
+    file: /etc/haproxy/haproxy.cfg
+
+- name: Copy haproxy.cfg
+  register: copy_haproxy_cfg
+  ansible.builtin.copy:
+    src: haproxy.cfg
+    dest: /etc/haproxy/haproxy.cfg
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Set lb_es_nodes fact
+  ansible.builtin.set_fact:
+    lb_es_nodes: "{{ groups['es'] | map('extract', hostvars, 'ansible_hostname') | list }}"
+
+# - debug:
+#     var: lb_es_nodes
+
+# - name: Stop for debug
+#   ansible.builtin.fail:
+#     msg: "lb_es_nodes={{ lb_es_nodes }}"
+
+- name: Write haproxy for elastic Services
+  ansible.builtin.include_role:
+    name: haproxy
+    tasks_from: tcp
+  loop:
+    - { svc_name: "elasticsearch", svc_port: "{{ lb_es_port }}", svc_group: es}
+    - { svc_name: "kibana", svc_port: "{{ siem_port }}", svc_group: kbn, be_port: 5601 }
+    - { svc_name: "fleet", svc_port: "{{ fleet_port }}", svc_group: fs, be_port: 8220 }
+  loop_control:
+    loop_var: svc_item
+  vars:
+    svc_name: "{{ svc_item.svc_name }}"
+    svc_port: "{{ svc_item.svc_port }}"
+    svc_group: "{{ svc_item.svc_group }}"
+    be_port: "{{ svc_item.be_port | default(svc_item.svc_port) }}"
+    
+
+- name: Reload systemd daemon
+  when: haproxy_override_service.changed
+  register: haproxy_daemon_reload
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: Restart haproxy service
+  when: haproxy_daemon_reload.skipped is not defined or copy_haproxy_cfg.changed
+  ansible.builtin.service:
+    name: haproxy
+    state: restarted
+    enabled: true

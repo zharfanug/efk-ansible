@@ -1,0 +1,11 @@
+---
+ansible_python_interpreter: /usr/bin/python3
+fsdb: {}
+BASE_DIR: "{{ playbook_dir | dirname }}"
+FILES_DIR: "{{ playbook_dir | dirname }}/files"
+ROLES_DIR: "{{ playbook_dir | dirname }}/roles"
+VARS_DIR: "{{ playbook_dir | dirname }}/vars"
+fs_policy_name: "default - Fleet Server Policy"
+es_policy_name: "default - Elasticsearch Policy"
+kbn_policy_name: "default - Kibana Policy"
+lb_policy_name: "default - Load Balancer Policy"

@@ -1,0 +1,7 @@
+CN="dc01-rnd-efk-elastic.pss.net"
+ca="int-ca"
+isCA="FALSE"
+KU="digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment"
+EKU="serverAuth, clientAuth"
+DNS="dc01-rnd-efk-elastic,dc01-rnd-efk-lb.pss.net,rnd-efk-vision.pss.net,dc01-rnd-efk-es01,dc01-rnd-efk-es01.pss.net,dc01-rnd-efk-es02,dc01-rnd-efk-es02.pss.net,dc01-rnd-efk-es03,dc01-rnd-efk-es03.pss.net,localhost"
+IP="100.100.25.71,100.100.25.72,100.100.25.77,100.100.25.78,100.100.25.79,100.100.25.70"

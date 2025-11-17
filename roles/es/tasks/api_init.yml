@@ -1,0 +1,90 @@
+- name: Read password from /root/.env
+  ansible.builtin.command:
+    cmd: cat /root/.env
+  register: env_file
+  changed_when: false
+
+- name: Set ELASTIC_PASSWORD fact
+  ansible.builtin.set_fact:
+    elastic_password: "{{ env_file.stdout | regex_search('ELASTIC_PASSWORD=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Set kibana_token fact
+  when: env_file.stdout is search('KIBANA_TOKEN=')
+  ansible.builtin.set_fact:
+    kibana_token: "{{ env_file.stdout | regex_search('KIBANA_TOKEN=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Check if Elasticsearch user exists
+  ansible.builtin.uri:
+    url: "https://localhost:9200/_security/user/{{ es_user }}"
+    method: GET
+    user: "elastic"
+    password: "{{ elastic_password }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: get_es_user
+  retries: 30
+  delay: 3
+  until: get_es_user.status in [200, 404]
+
+- name: Create Elasticsearch user
+  when: get_es_user.status == 404
+  register: put_es_user
+  ansible.builtin.uri:
+    url: "https://localhost:9200/_security/user/{{ es_user }}"
+    method: PUT
+    user: "elastic"
+    password: "{{ elastic_password }}"
+    headers:
+      Content-Type: "application/json"
+    body: >-
+      {
+        "password": "{{ es_pw | b64decode }}",
+        "roles": ["superuser"],
+        "full_name": "{{ es_fullname | default(es_user) }}",
+        "email": "{{ es_email | default(es_user ~ '@' ~ domain) }}"
+      }
+    body_format: json
+    status_code: 200
+    validate_certs: false
+  retries: 30
+  delay: 3
+  until: put_es_user.status == 200
+
+- name: Create Kibana API token
+  when: kibana_token is not defined
+  ansible.builtin.uri:
+    url: "https://localhost:9200/_security/service/elastic/kibana/credential/token/mykibana"
+    method: POST
+    user: "elastic"
+    password: "{{ elastic_password }}"
+    validate_certs: false
+    status_code: 200
+  register: create_kibana_token
+  retries: 30
+  delay: 3
+  until: create_kibana_token.status == 200
+
+- name: Set kibana_token fact
+  when:
+    - create_kibana_token.status is defined
+    - create_kibana_token.status == 200
+  ansible.builtin.set_fact:
+    kibana_token: "{{ create_kibana_token.json.token.value }}"
+
+- name: Store kibana_token in .env file
+  when:
+    - create_kibana_token.status is defined
+    - create_kibana_token.status == 200
+  ansible.builtin.lineinfile:
+    path: /root/.env
+    regexp: '^KIBANA_TOKEN='
+    line: "KIBANA_TOKEN=\"{{ kibana_token }}\""
+    create: yes
+
+- name: Copy .env to localhost
+  when:
+    - create_kibana_token.status is defined
+    - create_kibana_token.status == 200
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: env_fetch

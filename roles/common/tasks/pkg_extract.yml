@@ -1,0 +1,12 @@
+- name: Stat target directory
+  register: pkg_target_dir_stat
+  ansible.builtin.stat:
+    path: "{{ pkg_target_dir }}"
+
+- name: Extract Elastic Agent .tar.gz file
+  when: pkg_target_dir_stat.stat.exists == false
+  ansible.builtin.unarchive:
+    src: "{{ pkg_zip_path }}"
+    dest: "{{ pkg_dst_dir }}"
+    remote_src: true
+    mode: '0755'

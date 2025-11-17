@@ -1,0 +1,71 @@
+- name: Init Nftables
+  ansible.builtin.include_tasks: nftables.yml
+
+- name: Check if haproxy is installed
+  ansible.builtin.command: >
+    {% if ansible_os_family == 'Debian' %}
+      dpkg -s haproxy
+    {% elif ansible_os_family == 'RedHat' %}
+      rpm -q haproxy
+    {% else %}
+      ls /usr/sbin/haproxy
+    {% endif %}
+  register: hlb_installed
+  changed_when: false
+  failed_when: "hlb_installed.rc == 2"
+
+- name: Install haproxy
+  when: hlb_installed.rc != 0
+  ansible.builtin.package:
+    name: haproxy
+    state: present
+    update_cache: true
+
+- name: Check if keepalived is installed
+  ansible.builtin.command: >
+    {% if ansible_os_family == 'Debian' %}
+      dpkg -s keepalived
+    {% elif ansible_os_family == 'RedHat' %}
+      rpm -q keepalived
+    {% else %}
+      ls /usr/sbin/keepalived
+    {% endif %}
+  register: klb_installed
+  changed_when: false
+  failed_when: "klb_installed.rc == 2"
+
+- name: Install keepalived
+  when: klb_installed.rc != 0
+  ansible.builtin.package:
+    name: keepalived
+    state: present
+    update_cache: true
+
+- name: Check if nginx is installed
+  ansible.builtin.command: >
+    {% if ansible_os_family == 'Debian' %}
+      dpkg -s nginx
+    {% elif ansible_os_family == 'RedHat' %}
+      rpm -q nginx
+    {% else %}
+      ls /usr/sbin/nginx
+    {% endif %}
+  register: nglb_installed
+  changed_when: false
+  failed_when: "nglb_installed.rc == 2"
+
+- name: Install nginx
+  when: nglb_installed.rc != 0
+  ansible.builtin.package:
+    name: nginx
+    state: present
+    update_cache: true
+
+- name: Init keepalived
+  ansible.builtin.include_tasks: keepalived_init.yml
+
+- name: Init haproxy
+  ansible.builtin.include_tasks: haproxy_init.yml
+
+- name: Init nginx
+  ansible.builtin.include_tasks: nginx_init.yml

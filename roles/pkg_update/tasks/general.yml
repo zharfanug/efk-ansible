@@ -1,0 +1,6 @@
+- name: Upgrade package
+  ansible.builtin.package:
+    name: "*"
+    state: latest
+  register: upgrade_result
+  # noqa: package-latest

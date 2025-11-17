@@ -256,6 +256,7 @@
         user: "elastic"
         password: "{{ elastic_password }}"
         status_code: 200
+        validate_certs: false
       register: generate_kibana_token
     - name: Set kibana_token fact
       ansible.builtin.set_fact:
@@ -284,6 +285,7 @@
           }
         body_format: json
         status_code: 200
+        validate_certs: false
       register: create_user_output
     - name: Show create Elasticsearch user output
       ansible.builtin.debug:

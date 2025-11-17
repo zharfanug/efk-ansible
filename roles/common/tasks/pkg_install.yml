@@ -1,0 +1,7 @@
+- name: Copy {{ pkg_file }}
+  ansible.builtin.include_tasks: pkg_copy.yml
+
+- name: Install {{ pkg_file }} 
+  ansible.builtin.apt:
+    deb: /opt/packages/{{ pkg_file }}
+  register: pkg_install_result

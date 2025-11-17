@@ -1,0 +1,16 @@
+- name: Get stat of local .env
+  delegate_to: localhost
+  ansible.builtin.stat:
+    path: "{{ FILES_DIR }}/.env"
+  register: local_env_stat
+
+- name: Fetch .env if not exists locally
+  when: not local_env_stat.stat.exists
+  ansible.builtin.fetch:
+    src: /root/.env
+    dest: "{{ FILES_DIR }}/.env"
+    flat: true
+
+- name: Combine .env if exists locally
+  when: local_env_stat.stat.exists
+  ansible.builtin.include_tasks: env_combine.yml

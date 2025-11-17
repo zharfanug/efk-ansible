@@ -1,0 +1,43 @@
+- name: Create /opt/packages directory
+  ansible.builtin.file:
+    path: /opt/packages
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+- name: Check if /opt/packages/{{ pkg_file }} exists
+  ansible.builtin.stat:
+    path: "/opt/packages/{{ pkg_file }}"
+  register: pkg_file_stat
+- name: Copy /opt/packages/{{ pkg_file }} if not exist
+  ansible.builtin.copy:
+    src: "{{ FILES_DIR }}/packages/{{ pkg_file }}"
+    dest: "/opt/packages/{{ pkg_file }}"
+    mode: '0644'
+  when: not pkg_file_stat.stat.exists
+- name: Check if /opt/packages/{{ pkg_hash }} exists
+  ansible.builtin.stat:
+    path: /opt/packages/{{ pkg_hash }}
+  register: pkg_hash_stat
+- name: Copy /opt/packages/{{ pkg_hash }} if not exist
+  ansible.builtin.copy:
+    src: "{{ FILES_DIR }}/packages/{{ pkg_hash }}"
+    dest: /opt/packages/{{ pkg_hash }}
+    mode: '0644'
+  when: not pkg_hash_stat.stat.exists
+- name: Compute {{ hash_cmd }} of /opt/packages/{{ pkg_file }}
+  ansible.builtin.command:
+    cmd: "{{ hash_cmd }} /opt/packages/{{ pkg_file }}"
+  register: pkg_file_checksum
+  changed_when: false
+- name: Read /opt/packages/{{ pkg_hash }}
+  ansible.builtin.slurp:
+    src: /opt/packages/{{ pkg_hash }}
+  register: pkg_hash_raw
+- name: Decode pkg_hash_raw of /opt/packages/{{ pkg_hash }}
+  ansible.builtin.set_fact:
+    pkg_hash_value: "{{ pkg_hash_raw['content'] | b64decode | regex_replace('\\s.*', '') }}"
+- name: Compare checksums and fail if they don't match
+  ansible.builtin.debug:
+    msg: "Checksums of {{ pkg_file }} match! File is valid."
+  failed_when: pkg_file_checksum.stdout.split()[0] != pkg_hash_value

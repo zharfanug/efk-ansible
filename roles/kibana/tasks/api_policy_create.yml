@@ -1,0 +1,41 @@
+- name: Create {{ policy_name }}
+  register: policy_created
+  ansible.builtin.uri:
+    url: "https://localhost:5601/api/fleet/agent_policies?sys_monitoring=true"
+    method: POST
+    headers:
+      Content-Type: "application/json"
+      kbn-version: "{{ efk_ver }}"
+      x-elastic-internal-origin: "Kibana"
+      Cookie: "{{ kibana_login.set_cookie }}"
+    body_format: json
+    body:
+      name: "{{ policy_name }}"
+      description: "{{ policy_description }}"
+      namespace: "default"
+      monitoring_enabled:
+        - "logs"
+        - "metrics"
+        - "traces"
+      inactivity_timeout: 1209600
+      is_protected: false
+      has_fleet_server: "{{ has_fleet_server | default(false) }}"
+    validate_certs: false
+    status_code:
+      - 200
+      - 409
+
+- name: Save policy id fact
+  ansible.builtin.set_fact:
+    policy_id: "{{ policy_created.json.item.id }}"
+
+- name: Save policy_id to .env
+  ansible.builtin.lineinfile:
+    path: /root/.env
+    regexp: "^{{ policy_prefix }}_POLICY_ID="
+    line: "{{ policy_prefix }}_POLICY_ID=\"{{ policy_id }}\""
+    create: true
+
+  # retries: 30
+  # delay: 3
+  # until: policy_created.status == 200

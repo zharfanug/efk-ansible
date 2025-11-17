@@ -1,49 +1,57 @@
-# Ignore Python virtual environments
-venv/
-.env/
+# Ansible project .gitignore
+
+# Python bytecode
+__pycache__/
 *.pyc
 *.pyo
 *.pyd
-__pycache__/
-*.pylintrc
-*.pytest_cache/
-*.coverage
-*.egg-info/
-.eggs/
-pip-wheel-metadata/
 
-# Ignore Ansible-specific files
-*.retry
+# Virtual environments
+.vscode/
+/*venv/
+.env/
+ENV/
+
+# Ansible facts cache and logs
+.fact_cache/
+.ansible/
 *.log
-*.vault
-.vault-pass
-*.cfg.bak
 
-# Ignore sensitive files (be cautious about uncommitted files!)
-inventory/
-host_vars/
-group_vars/
-secrets.yml
+# Secrets and vault files
+*.vault
+*.secret
 *.key
 *.pem
-*.inf
+*.crt
+*.j2~
 *.conf
-playbooks/test.yml
 
-# Ignore temporary directories and files
-tmp/
-temp/
-files/
-.cache/
-.DS_Store
+# Inventory and host_vars/group_vars backups
+inventory/hosts
+inventory/*/env.yml
+
+# Temporary files
 *.swp
 *.swo
+*.tmp
 *.bak
-*.orig
 
-# Ignore tools' and editor-specific files
-.idea/
-.vscode/
-*.code-workspace
+# System files
+.DS_Store
+Thumbs.db
 
-!dist/base/nft/nftables.conf
+/files/
+# res/
+tests/
+
+# Files in roles that shouldn't be tracked
+roles/*/.retry
+roles/*/.cache
+# roles/*/files/
+# roles/*/templates/
+# roles/*/vars/
+# roles/*/defaults/
+roles/*/meta/
+roles/*/handlers/
+# roles/*/tasks/
+roles/*/inventory/

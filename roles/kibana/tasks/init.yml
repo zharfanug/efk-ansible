@@ -1,0 +1,72 @@
+- name: Copy .env to all nodes
+  ansible.builtin.copy:
+    src: "{{ FILES_DIR }}/.env"
+    dest: /root/.env
+    mode: '0600'
+
+- name: Create directory for Kibana certificates
+  ansible.builtin.file:
+    path: /etc/kibana/certs
+    state: directory
+    mode: "0750"
+    owner: "root"
+    group: "kibana"
+
+- name: Copy all required Kibana certificates
+  ansible.builtin.copy:
+    src: "{{ item }}"
+    dest: "/etc/kibana/certs/{{ item | basename }}"
+    owner: "root"
+    group: "kibana"
+    mode: "0660"
+  with_fileglob:
+    - "../files/certs/kibana/*"
+
+- name: Backup kibana configuration files 
+  ansible.builtin.include_role:
+    name: common
+    tasks_from: backup
+  vars:
+    file: /etc/kibana/kibana.yml
+
+- name: Read password from /root/.env
+  ansible.builtin.command:
+    cmd: cat /root/.env
+  register: env_file
+  changed_when: false
+
+- name: Set kibana_token fact
+  ansible.builtin.set_fact:
+    kibana_token: "{{ env_file.stdout | regex_search('KIBANA_TOKEN=\"(.+)\"', '\\1') | first | trim }}"
+
+- name: Get encryption keys
+  when: inventory_hostname == groups['kbn'][0]
+  ansible.builtin.include_tasks: enc_keys_get.yml
+
+- name: Copy .env to all nodes
+  ansible.builtin.copy:
+    src: "{{ FILES_DIR }}/.env"
+    dest: /root/.env
+    mode: '0600'
+
+- name: Get encryption keys for all
+  ansible.builtin.include_tasks: enc_keys_get.yml
+
+- debug:
+    msg: "kbn_enc_so={{ kbn_enc_so }}, kbn_enc_report={{ kbn_enc_report }}, kbn_enc_sec={{ kbn_enc_sec }}"
+
+- name: Generate kibana.yml from template
+  register: update_kibana_config
+  ansible.builtin.template:
+    src: kibana.yml.j2
+    dest: /etc/kibana/kibana.yml
+    owner: "root"
+    group: "kibana"
+    mode: "0660"
+
+- name: Restart Kibana service
+  when: update_kibana_config.changed
+  ansible.builtin.service:
+    name: kibana
+    state: restarted
+    enabled: true

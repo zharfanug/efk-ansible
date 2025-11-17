@@ -1,0 +1,4 @@
+- name: Upgrade package for Debian
+  ansible.builtin.apt:
+    upgrade: dist
+  register: upgrade_result

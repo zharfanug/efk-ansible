@@ -1,0 +1,7 @@
+- name: Check if /mnt/data exists
+  ansible.builtin.stat:
+    path: /mnt/data
+  register: mnt_data_stat
+- name: Init disk if /mnt/data not exist
+  when: not mnt_data_stat.stat.exists
+  ansible.builtin.include_tasks: disk_init.yml

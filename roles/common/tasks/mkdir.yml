@@ -1,0 +1,16 @@
+- name: Add {{ dir_parent }} to fsdb
+  when: dir_parent not in fsdb
+  ansible.builtin.include_tasks: fsdb_add.yml
+
+- name: Create {{ dir_path }} for shared
+  when: fsdb.get(dir_parent, 'local') == 'fuse.glusterfs' 
+  run_once: true
+  ansible.builtin.file:
+    path: "{{ dir_path }}"
+    state: directory
+
+- name: Create {{ dir_path }} for local
+  when: fsdb.get(dir_parent, 'local') != 'fuse.glusterfs'
+  ansible.builtin.file:
+    path: "{{ dir_path }}"
+    state: directory

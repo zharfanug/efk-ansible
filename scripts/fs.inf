@@ -1,0 +1,7 @@
+CN="dc01-rnd-efk-fleet.pss.net"
+ca="int-ca"
+isCA="FALSE"
+KU="digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment"
+EKU="serverAuth, clientAuth"
+DNS="dc01-rnd-efk-fleet,dc01-rnd-efk-lb.pss.net,rnd-efk-vision.pss.net,dc01-rnd-efk-fs01,dc01-rnd-efk-fs01.pss.net,dc01-rnd-efk-fs02,dc01-rnd-efk-fs02.pss.net,localhost"
+IP="100.100.25.71,100.100.25.72,100.100.25.75,100.100.25.76,100.100.25.70"

@@ -1,0 +1,12 @@
+- name: Init Nftables
+  ansible.builtin.include_tasks: nftables.yml
+
+- name: Check if Fleet is installed
+  ansible.builtin.command: ls /opt/Elastic/Agent/elastic-agent
+  register: fs_installed
+  changed_when: false
+  failed_when: false
+
+- name: Install Fleet Server
+  when: fs_installed.rc != 0
+  ansible.builtin.include_tasks: install.yml

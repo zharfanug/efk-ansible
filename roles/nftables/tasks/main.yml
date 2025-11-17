@@ -1,0 +1,34 @@
+- name: Copy nftables.conf
+  ansible.builtin.copy:
+    src: nftables.conf.dist
+    dest: /etc/nftables.conf
+
+- name: Remove nftables.d
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: absent
+
+- name: Create nftables.d directory
+  ansible.builtin.file:
+    path: /etc/nftables.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Copy nftables.d nft
+  ansible.builtin.template:
+    src: nftables.d/{{ item }}
+    dest: /etc/nftables.d/{{ item }}
+  loop:
+    - custom-define.nft
+    - custom-input.nft
+    - custom-sets.nft
+    - std-define.nft
+    - std-input.nft
+    - std-sets.nft
+
+- name: Restart nftables service
+  ansible.builtin.service:
+    name: nftables
+    state: restarted
