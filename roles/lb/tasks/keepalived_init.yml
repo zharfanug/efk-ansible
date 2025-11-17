@@ -5,6 +5,7 @@
     dest: /etc/keepalived/keepalived.conf
 
 - name: Write /etc/nftables.d/custom-input.nft
+  when: enable_nftables | default(false) | bool
   register: vrrp_nft
   ansible.builtin.lineinfile:
     path: /etc/nftables.d/custom-input.nft
@@ -13,7 +14,9 @@
     create: yes
 
 - name: Restart nftables service
-  when: vrrp_nft.changed
+  when:
+    - enable_nftables | default(false) | bool
+    - vrrp_nft.changed
   ansible.builtin.service:
     name: nftables
     state: restarted
